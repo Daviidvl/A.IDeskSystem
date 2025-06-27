@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Painel do Técnico</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="tecnico.js" defer></script>
+</head>
+<body>
+  <div class="tecnico-container">
+    <aside class="sidebar">
+      <h2>Chats Ativos</h2>
+      <ul id="chat-list"></ul>
+    </aside>
+
+    <main class="chat-area">
+      <div id="chat" class="chat-box"></div>
+      <form id="chatForm" class="chat-form">
+        <input type="text" id="mensagem" placeholder="Responder ao cliente..." required autocomplete="off"/>
+        <button type="submit">Enviar</button>
+      </form>
+    </main>
+  </div>
+</body>
+</html>

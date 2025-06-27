@@ -1,0 +1,182 @@
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #eceff1;
+}
+
+.chat-container {
+  max-width: 600px;
+  margin: 50px auto;
+  background-color: #e8f5e9;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  height: 80vh;
+  box-shadow: 0 0 10px rgba(0,0,0,0.1);
+}
+
+.chat-box {
+  flex: 1;
+  padding: 1rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.chat-form {
+  display: flex;
+  border-top: 1px solid #ccc;
+}
+
+.chat-form input {
+  flex: 1;
+  padding: 1rem;
+  border: none;
+  font-size: 1rem;
+  border-radius: 0 0 0 8px;
+}
+
+.chat-form button {
+  padding: 1rem 2rem;
+  background-color: #007bff;
+  color: white;
+  border: none;
+  font-weight: bold;
+  border-radius: 0 0 8px 0;
+  cursor: pointer;
+}
+
+.chat-form button:hover {
+  background-color: #0056b3;
+}
+
+.mensagem {
+  padding: 1rem;
+  border-radius: 8px;
+  max-width: 80%;
+}
+
+.cliente {
+  align-self: flex-end;
+  background-color: #d1ecf1;
+}
+
+.tecnico {
+  align-self: flex-start;
+  background-color: #c8e6c9;
+}
+
+.erro {
+  background-color: #ffcdd2;
+  color: #b71c1c;
+  text-align: center;
+}
+
+.tecnico-container {
+  display: flex;
+  height: 100vh;
+}
+
+.sidebar {
+  width: 250px;
+  background-color: #1e293b;
+  color: white;
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+.sidebar h2 {
+  margin-top: 0;
+}
+
+#chat-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.chat-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: background 0.2s;
+}
+
+.chat-item:hover {
+  background-color: #334155;
+}
+
+.chat-item img {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.chat-item .chat-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.notificacao {
+  width: 10px;
+  height: 10px;
+  background-color: #ff3d00;
+  border-radius: 50%;
+  margin-left: auto;
+  align-self: center;
+}
+
+
+.login-container {
+  max-width: 400px;
+  margin: 50px auto;
+  background-color: #fff;
+  padding: 2rem;
+  border-radius: 8px;
+  box-shadow: 0 0 10px rgba(0,0,0,0.1);
+}
+
+.login-container input,
+.login-container select,
+.login-container textarea,
+.login-container button {
+  width: 100%;
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  border-radius: 5px;
+  border: 1px solid #ccc;
+}
+
+.login-container button {
+  background-color: #007bff;
+  color: white;
+  font-weight: bold;
+  border: none;
+  cursor: pointer;
+}
+
+.login-container button:hover {
+  background-color: #0056b3;
+}
+
+.hidden {
+  display: none;
+}
+
+.icone-genero {
+  font-size: 1.8rem;
+  margin-right: 0.5rem;
+  align-self: center;
+}
+
