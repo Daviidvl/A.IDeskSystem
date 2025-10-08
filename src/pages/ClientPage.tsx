@@ -4,6 +4,8 @@ import { LGPDModal } from '../components/LGPDModal';
 import { ChatMessage } from '../components/ChatMessage';
 import { supabase, Message } from '../lib/supabase';
 import { getAIResponse, analyzeClientResponse } from '../lib/aiResponses';
+import { initSocket, joinTicket, sendSocketMessage, onNewMessage, disconnectSocket } from '../lib/socket';
+
 
 export const ClientPage: React.FC = () => {
   const [lgpdAccepted, setLgpdAccepted] = useState(false);
@@ -21,28 +23,54 @@ export const ClientPage: React.FC = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+useEffect(() => {
+  if (!ticketId) return;
 
-  const addMessage = async (content: string, senderType: 'client' | 'ai' | 'technician', senderName: string) => {
-    if (!ticketId) return;
+  const s = initSocket();
+  s.emit('join_ticket', ticketId);
 
-    const { data, error } = await supabase
-      .from('messages')
-      .insert({
-        ticket_id: ticketId,
-        sender_type: senderType,
-        sender_name: senderName,
-        content
-      })
-      .select()
-      .single();
-
-    if (data && !error) {
-      setMessages(prev => [...prev, data]);
-    }
+  const handleNew = (msg: any) => {
+    // evita duplicatas (checa id)
+    setMessages(prev => {
+      if (prev.some(m => m.id === msg.id)) return prev;
+      return [...prev, msg];
+    });
   };
+
+  s.on('new_message', handleNew);
+
+  return () => {
+    s.off('new_message', handleNew);
+  };
+}, [ticketId]);
+
+const addMessage = async (content: string, senderType: 'client' | 'ai' | 'technician', senderName: string) => {
+  if (!ticketId) return;
+
+  const { data, error } = await supabase
+    .from('messages')
+    .insert({
+      ticket_id: ticketId,
+      sender_type: senderType,
+      sender_name: senderName,
+      content
+    })
+    .select()
+    .single();
+
+  if (data && !error) {
+    setMessages(prev => [...prev, data]);
+
+    // emite via socket para que técnico/cliente recebam em tempo real
+    try {
+      sendSocketMessage(ticketId, data);
+    } catch (err) {
+      console.warn('socket emit failed:', err);
+    }
+
+    return data;
+  }
+};
 
   const handleLGPDAccept = () => {
     setLgpdAccepted(true);

@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Send, LogOut, Ticket as TicketIcon, Clock, CheckCircle } from 'lucide-react';
 import { supabase, Ticket, Message } from '../lib/supabase';
 import { ChatMessage } from '../components/ChatMessage';
+import { initSocket, joinTicket, sendSocketMessage } from '../lib/socket';
+
 
 export const TechnicianPage: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -101,38 +103,81 @@ export const TechnicianPage: React.FC = () => {
     setSelectedTicket(null);
   };
 
-  const handleSelectTicket = async (ticket: Ticket) => {
-    setSelectedTicket(ticket);
+  const newMessageHandlerRef = React.useRef<((m:any)=>void) | null>(null);
 
-    if (ticket.status === 'open') {
-      await supabase
-        .from('tickets')
-        .update({
-          status: 'in_progress',
-          assigned_technician_id: techId
-        })
-        .eq('id', ticket.id);
+const handleSelectTicket = async (ticket: Ticket) => {
+  setSelectedTicket(ticket);
 
-      loadTickets();
-    }
+  if (ticket.status === 'open') {
+    await supabase
+      .from('tickets')
+      .update({
+        status: 'in_progress',
+        assigned_technician_id: techId
+      })
+      .eq('id', ticket.id);
+
+    loadTickets();
+  }
+
+  // Conectar socket e entrar na sala
+  const s = initSocket();
+  s.emit('join_ticket', ticket.id);
+
+  // remove listener anterior (se houver)
+  if (newMessageHandlerRef.current) {
+    s.off('new_message', newMessageHandlerRef.current);
+    newMessageHandlerRef.current = null;
+  }
+
+  const handler = (msg: any) => {
+    // msg deve ser o objeto salvo no supabase (com id, content, sender_type...)
+    if (msg.ticket_id !== ticket.id) return;
+    setMessages(prev => {
+      if (prev.some(m => m.id === msg.id)) return prev;
+      return [...prev, msg];
+    });
   };
+
+  newMessageHandlerRef.current = handler;
+  s.on('new_message', handler);
+
+  // carrega mensagens atuais
+  loadMessages();
+};
+
 
   const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inputMessage.trim() || !selectedTicket) return;
+  e.preventDefault();
+  if (!inputMessage.trim() || !selectedTicket) return;
 
-    await supabase
-      .from('messages')
-      .insert({
-        ticket_id: selectedTicket.id,
-        sender_type: 'technician',
-        sender_name: techName,
-        content: inputMessage
-      });
+  // insere no banco (persistência)
+  const { data, error } = await supabase
+    .from('messages')
+    .insert({
+      ticket_id: selectedTicket.id,
+      sender_type: 'technician',
+      sender_name: techName,
+      content: inputMessage
+    })
+    .select()
+    .single();
 
-    setInputMessage('');
-    loadMessages();
-  };
+  setInputMessage('');
+  // atualiza lista local
+  if (data) setMessages(prev => [...prev, data]);
+
+  // emite via socket para clientes conectados
+  try {
+    sendSocketMessage(selectedTicket.id, data);
+  } catch (err) {
+    console.warn('socket emit failed:', err);
+  }
+
+  // opcional: atualiza via loadMessages() se quiser
+  // loadMessages();
+};
+
 
   const handleResolveTicket = async () => {
     if (!selectedTicket) return;
