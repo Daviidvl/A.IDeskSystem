@@ -6,7 +6,6 @@ import { supabase, Message } from '../lib/supabase';
 import { getAIResponse, analyzeClientResponse } from '../lib/aiResponses';
 import { initSocket, joinTicket, sendSocketMessage, onNewMessage, disconnectSocket } from '../lib/socket';
 
-
 export const ClientPage: React.FC = () => {
   const [lgpdAccepted, setLgpdAccepted] = useState(false);
   const [clientName, setClientName] = useState('');
@@ -23,54 +22,62 @@ export const ClientPage: React.FC = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-useEffect(() => {
-  if (!ticketId) return;
+  // conecta ao socket / entra na sala e registra listener usando helper onNewMessage
+  useEffect(() => {
+    if (!ticketId) return;
 
-  const s = initSocket();
-  s.emit('join_ticket', ticketId);
+    initSocket();
+    joinTicket(ticketId);
 
-  const handleNew = (msg: any) => {
-    // evita duplicatas (checa id)
-    setMessages(prev => {
-      if (prev.some(m => m.id === msg.id)) return prev;
-      return [...prev, msg];
-    });
-  };
+    const handleNew = (msg: any) => {
+      if (msg.ticket_id && msg.ticket_id !== ticketId) return;
+      setMessages(prev => {
+        if (prev.some(m => m.id === msg.id)) return prev;
+        return [...prev, msg];
+      });
+    };
 
-  s.on('new_message', handleNew);
+    onNewMessage(handleNew);
 
-  return () => {
-    s.off('new_message', handleNew);
-  };
-}, [ticketId]);
+    return () => {
+      // remove listener e desconecta socket ao sair da página/chamado
+      // onNewMessage não retorna cleanup, então usamos disconnectSocket para garantir fim da conexão
+      disconnectSocket();
+    };
+  }, [ticketId]);
 
-const addMessage = async (content: string, senderType: 'client' | 'ai' | 'technician', senderName: string) => {
-  if (!ticketId) return;
+  // rola a página quando mensagens mudam
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
 
-  const { data, error } = await supabase
-    .from('messages')
-    .insert({
-      ticket_id: ticketId,
-      sender_type: senderType,
-      sender_name: senderName,
-      content
-    })
-    .select()
-    .single();
+  const addMessage = async (content: string, senderType: 'client' | 'ai' | 'technician', senderName: string) => {
+    if (!ticketId) return;
 
-  if (data && !error) {
-    setMessages(prev => [...prev, data]);
+    const { data, error } = await supabase
+      .from('messages')
+      .insert({
+        ticket_id: ticketId,
+        sender_type: senderType,
+        sender_name: senderName,
+        content
+      })
+      .select()
+      .single();
 
-    // emite via socket para que técnico/cliente recebam em tempo real
-    try {
-      sendSocketMessage(ticketId, data);
-    } catch (err) {
-      console.warn('socket emit failed:', err);
+    if (data && !error) {
+      setMessages(prev => [...prev, data]);
+
+      // emite via socket para que técnico/cliente recebam em tempo real
+      try {
+        sendSocketMessage(ticketId, data);
+      } catch (err) {
+        console.warn('socket emit failed:', err);
+      }
+
+      return data;
     }
-
-    return data;
-  }
-};
+  };
 
   const handleLGPDAccept = () => {
     setLgpdAccepted(true);
@@ -130,7 +137,7 @@ const addMessage = async (content: string, senderType: 'client' | 'ai' | 'techni
         .update({ problem_description: userMessage })
         .eq('id', ticketId);
 
-      const aiResponse = getAIResponse(userMessage);
+      const aiResponse = await getAIResponse(userMessage);
 
       setTimeout(async () => {
         await addMessage(aiResponse.text, 'ai', 'A.I Assistant');
