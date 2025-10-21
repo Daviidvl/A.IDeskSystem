@@ -5,7 +5,9 @@ let socket: Socket | null = null;
 
 export const initSocket = () => {
   if (!socket) {
-    socket = io("http://localhost:3001"); // 🔹 mesma porta do server.js
+    socket = io(import.meta.env.VITE_SOCKET_URL || "http://localhost:3001", {
+      transports: ["websocket"],
+    });
   }
   return socket;
 };
@@ -17,7 +19,14 @@ export const joinTicket = (ticketId: string) => {
 
 export const sendSocketMessage = (ticketId: string, message: any) => {
   if (!socket) return;
-  socket.emit("send_message", { ticketId, message });
+
+  // 🔹 Corrigido: estrutura esperada pelo servidor
+  const formattedMessage = {
+    ticket_id: ticketId,
+    ...message,
+  };
+
+  socket.emit("send_message", formattedMessage);
 };
 
 export const onNewMessage = (callback: (message: any) => void) => {

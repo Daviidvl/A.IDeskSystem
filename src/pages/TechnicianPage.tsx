@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Send, LogOut, Ticket as TicketIcon, Clock, CheckCircle } from 'lucide-react';
 import { supabase, Ticket, Message } from '../lib/supabase';
 import { ChatMessage } from '../components/ChatMessage';
-import { initSocket, joinTicket, sendSocketMessage } from '../lib/socket';
+import { initSocket, sendSocketMessage } from '../lib/socket';
 
 export const TechnicianPage: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -17,7 +17,7 @@ export const TechnicianPage: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const socketRef = useRef<any>(null);
 
-  // autenticação local (mantém login)
+  // 🔹 mantém login local
   useEffect(() => {
     const savedAuth = localStorage.getItem('techAuth');
     if (savedAuth) {
@@ -28,7 +28,7 @@ export const TechnicianPage: React.FC = () => {
     }
   }, []);
 
-  // recarrega tickets periodicamente
+  // 🔹 recarrega tickets periodicamente
   useEffect(() => {
     if (isAuthenticated) {
       loadTickets();
@@ -37,7 +37,7 @@ export const TechnicianPage: React.FC = () => {
     }
   }, [isAuthenticated]);
 
-  // scroll automático no chat
+  // 🔹 scroll automático no chat
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -95,22 +95,25 @@ export const TechnicianPage: React.FC = () => {
     setSelectedTicket(ticket);
     await loadMessages(ticket.id);
 
+    // 🔸 muda status para "em atendimento" se estiver aberto
     if (ticket.status === 'open') {
       await supabase
         .from('tickets')
         .update({
           status: 'in_progress',
-          assigned_technician_id: techId
+          assigned_technician_id: techId,
         })
         .eq('id', ticket.id);
-
       loadTickets();
     }
 
+    // 🔸 cria conexão Socket.IO
     if (!socketRef.current) socketRef.current = initSocket();
 
+    // 🔸 entra na sala do ticket
     socketRef.current.emit('join_ticket', ticket.id);
 
+    // 🔸 evita múltiplos listeners
     socketRef.current.off('new_message');
     socketRef.current.on('new_message', (msg: any) => {
       if (msg.ticket_id === ticket.id) {
@@ -123,32 +126,36 @@ export const TechnicianPage: React.FC = () => {
   };
 
   const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inputMessage.trim() || !selectedTicket) return;
+  e.preventDefault();
+  if (!inputMessage.trim() || !selectedTicket) return;
 
-    const { data, error: insertError } = await supabase
-      .from('messages')
-      .insert({
-        ticket_id: selectedTicket.id,
-        sender_type: 'technician',
-        sender_name: techName,
-        content: inputMessage
-      })
-      .select()
-      .single();
-
-    setInputMessage('');
-
-    if (insertError) {
-      console.warn('Erro ao enviar mensagem:', insertError);
-      return;
-    }
-
-    if (data) {
-      setMessages((prev) => [...prev, data]);
-      sendSocketMessage(selectedTicket.id, data);
-    }
+  const newMessage = {
+    ticket_id: selectedTicket.id,
+    sender_type: 'technician',
+    sender_name: techName,
+    content: inputMessage,
+    created_at: new Date().toISOString(),
   };
+
+  const { data, error } = await supabase
+    .from('messages')
+    .insert(newMessage)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('❌ Erro ao enviar mensagem:', error);
+    alert(`Erro ao enviar mensagem: ${error.message}`);
+    return;
+  }
+
+  setInputMessage('');
+  setMessages((prev) => [...prev, data]);
+  sendSocketMessage(selectedTicket.id, data);
+
+  // recarrega mensagens (garantia extra)
+  setTimeout(() => loadMessages(selectedTicket.id), 500);
+};
 
   const handleResolveTicket = async () => {
     if (!selectedTicket) return;
@@ -157,7 +164,7 @@ export const TechnicianPage: React.FC = () => {
       .from('tickets')
       .update({
         status: 'resolved',
-        resolved_at: new Date().toISOString()
+        resolved_at: new Date().toISOString(),
       })
       .eq('id', selectedTicket.id);
 
@@ -165,7 +172,7 @@ export const TechnicianPage: React.FC = () => {
     loadTickets();
   };
 
-  // Tela de login
+  // 🔹 Tela de Login
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-800 flex items-center justify-center p-4">
@@ -215,7 +222,7 @@ export const TechnicianPage: React.FC = () => {
     );
   }
 
-  // Tela principal
+  // 🔹 Tela Principal
   return (
     <div className="min-h-screen bg-gray-50 flex">
       {/* Painel lateral */}
