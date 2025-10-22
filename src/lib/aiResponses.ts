@@ -1,63 +1,70 @@
-export interface AIResponse {
-  text: string;
-  requiresHuman: boolean;
+// src/lib/aiResponses.ts
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  apiKey: import.meta.env.VITE_OPENAI_API_KEY,
+  dangerouslyAllowBrowser: true, // necessário no Vite
+});
+
+// 🔹 contador de tentativas por ticket (persistente no navegador)
+const attemptCount: Record<string, number> = JSON.parse(
+  localStorage.getItem("aiAttempts") || "{}"
+);
+
+const saveAttempts = () => {
+  localStorage.setItem("aiAttempts", JSON.stringify(attemptCount));
+};
+
+export async function getAIResponse(ticketId: string, userMessage: string) {
+  // Inicializa o contador caso ainda não exista
+  if (!attemptCount[ticketId]) attemptCount[ticketId] = 0;
+
+  // Se já tentou 3 vezes, envia pro técnico
+  if (attemptCount[ticketId] >= 3) {
+    return {
+      text: "Não consegui resolver por aqui. Estou encaminhando o caso para um técnico humano. 🧑‍🔧",
+      requiresHuman: true,
+    };
+  }
+
+  try {
+    // 🔁 Incrementa tentativa e salva
+    attemptCount[ticketId]++;
+    saveAttempts();
+    console.log(`🔁 Tentativa da IA (${ticketId}):`, attemptCount[ticketId]);
+
+    // 💬 Chamada à OpenAI
+    const completion = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content:
+            "Você é um assistente técnico virtual do sistema A.I Desk. Sua função é tentar resolver o problema do cliente em até 3 mensagens. Se o problema não for resolvido, avise que o chamado será encaminhado para um técnico humano.",
+        },
+        {
+          role: "user",
+          content: userMessage,
+        },
+      ],
+      max_tokens: 200,
+      temperature: 0.7,
+    });
+
+    const aiText = completion.choices[0]?.message?.content?.trim() || "Desculpe, não consegui gerar uma resposta.";
+
+    // 🔚 Verifica se precisa encaminhar para o técnico
+    const requiresHuman =
+      attemptCount[ticketId] >= 3 ||
+      /encaminhar|técnico|humano|não consigo/i.test(aiText);
+
+    return { text: aiText, requiresHuman };
+  } catch (error) {
+    console.error("Erro na IA:", error);
+    return {
+      text: "Ocorreu um erro ao tentar processar sua solicitação. Encaminhando para um técnico humano.",
+      requiresHuman: true,
+    };
+  }
 }
 
-const knowledgeBase: Record<string, AIResponse> = {
-  'internet': {
-    text: 'Entendo que você está com problemas de internet. Vamos tentar alguns passos:\n\n1. Desligue o modem/roteador da tomada\n2. Aguarde 10 segundos\n3. Ligue novamente\n4. Aguarde 2 minutos para estabilizar\n\nIsso resolveu o problema?',
-    requiresHuman: false
-  },
-  'lento': {
-    text: 'Para problemas de lentidão:\n\n1. Verifique quantos dispositivos estão conectados\n2. Tente aproximar-se do roteador\n3. Reinicie o dispositivo que está lento\n4. Teste a velocidade em: speedtest.net\n\nMelhorou?',
-    requiresHuman: false
-  },
-  'wifi': {
-    text: 'Problemas com WiFi:\n\n1. Verifique se o WiFi está ativado no dispositivo\n2. Esqueça a rede e conecte novamente\n3. Verifique se a senha está correta\n4. Reinicie o roteador\n\nConseguiu conectar?',
-    requiresHuman: false
-  },
-  'cabo': {
-    text: 'Vamos verificar os cabos:\n\n1. Certifique-se que o cabo de rede está bem conectado\n2. Verifique se não há dobras ou danos no cabo\n3. Teste outro cabo se possível\n4. Confira se está na porta correta do modem\n\nFuncionou?',
-    requiresHuman: false
-  },
-  'tv': {
-    text: 'Para problemas na TV:\n\n1. Verifique se o cabo coaxial está bem conectado\n2. Reinicie o decodificador\n3. Teste em outro canal\n4. Verifique se há mensagens de erro na tela\n\nO problema persiste?',
-    requiresHuman: false
-  }
-};
-
-export const getAIResponse = (message: string): AIResponse => {
-  const lowerMessage = message.toLowerCase();
-
-  for (const [keyword, response] of Object.entries(knowledgeBase)) {
-    if (lowerMessage.includes(keyword)) {
-      return response;
-    }
-  }
-
-  return {
-    text: 'Entendo sua situação. Para melhor atendê-lo, vou transferir você para um técnico especializado que poderá resolver seu problema. Por favor, aguarde alguns instantes.',
-    requiresHuman: true
-  };
-};
-
-export const analyzeClientResponse = (message: string): boolean => {
-  const positiveResponses = ['sim', 'resolveu', 'funcionou','deu certo', 'obrigado'];
-  const negativeResponses = ['não', 'nao', 'ainda', 'continua', 'persiste', 'não funcionou'];
-
-  const lowerMessage = message.toLowerCase();
-
-  for (const positive of positiveResponses) {
-    if (lowerMessage.includes(positive)) {
-      return true;
-    }
-  }
-
-  for (const negative of negativeResponses) {
-    if (lowerMessage.includes(negative)) {
-      return false;
-    }
-  }
-
-  return false;
-};

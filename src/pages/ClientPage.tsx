@@ -3,7 +3,7 @@ import { Send, MessageSquare } from 'lucide-react';
 import { LGPDModal } from '../components/LGPDModal';
 import { ChatMessage } from '../components/ChatMessage';
 import { supabase, Message } from '../lib/supabase';
-import { getAIResponse, analyzeClientResponse } from '../lib/aiResponses';
+import { getAIResponse } from '../lib/aiResponses'; // ✅ apenas uma função
 import { initSocket, joinTicket, sendSocketMessage, onNewMessage, disconnectSocket } from '../lib/socket';
 
 export const ClientPage: React.FC = () => {
@@ -22,7 +22,7 @@ export const ClientPage: React.FC = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  // conecta ao socket / entra na sala e registra listener usando helper onNewMessage
+  // Conecta e ouve novas mensagens
   useEffect(() => {
     if (!ticketId) return;
 
@@ -38,18 +38,10 @@ export const ClientPage: React.FC = () => {
     };
 
     onNewMessage(handleNew);
-
-    return () => {
-      // remove listener e desconecta socket ao sair da página/chamado
-      // onNewMessage não retorna cleanup, então usamos disconnectSocket para garantir fim da conexão
-      disconnectSocket();
-    };
+    return () => disconnectSocket();
   }, [ticketId]);
 
-  // rola a página quando mensagens mudam
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+  useEffect(() => scrollToBottom(), [messages]);
 
   const addMessage = async (content: string, senderType: 'client' | 'ai' | 'technician', senderName: string) => {
     if (!ticketId) return;
@@ -67,21 +59,16 @@ export const ClientPage: React.FC = () => {
 
     if (data && !error) {
       setMessages(prev => [...prev, data]);
-
-      // emite via socket para que técnico/cliente recebam em tempo real
       try {
         sendSocketMessage(ticketId, data);
       } catch (err) {
         console.warn('socket emit failed:', err);
       }
-
       return data;
     }
   };
 
-  const handleLGPDAccept = () => {
-    setLgpdAccepted(true);
-  };
+  const handleLGPDAccept = () => setLgpdAccepted(true);
 
   const handleStartChat = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -137,64 +124,51 @@ export const ClientPage: React.FC = () => {
         .update({ problem_description: userMessage })
         .eq('id', ticketId);
 
-      const aiResponse = await getAIResponse(userMessage);
+      const aiResponse = await getAIResponse(ticketId, userMessage);
 
       setTimeout(async () => {
         await addMessage(aiResponse.text, 'ai', 'A.I Assistant');
 
         if (aiResponse.requiresHuman) {
-          setTimeout(async () => {
-            await supabase
-              .from('tickets')
-              .update({ status: 'in_progress' })
-              .eq('id', ticketId);
-
-            await addMessage(
-              'Seu chamado foi encaminhado para nossa equipe técnica. Um especialista entrará em contato em breve. Número do seu chamado: #' + ticketId.slice(0, 8),
-              'ai',
-              'A.I Assistant'
-            );
-          }, 2000);
-        } else {
-          setConversationStep(1);
-        }
-        setIsLoading(false);
-      }, 1500);
-    } else if (conversationStep === 1) {
-      const resolved = analyzeClientResponse(userMessage);
-
-      setTimeout(async () => {
-        if (resolved) {
-          await supabase
-            .from('tickets')
-            .update({ status: 'resolved', resolved_at: new Date().toISOString() })
-            .eq('id', ticketId);
-
-          await addMessage(
-            'Fico feliz em ter ajudado! 😊\n\nSeu chamado foi marcado como resolvido. Se precisar de algo mais, estamos à disposição!',
-            'ai',
-            'A.I Assistant'
-          );
-        } else {
           await supabase
             .from('tickets')
             .update({ status: 'in_progress' })
             .eq('id', ticketId);
 
           await addMessage(
-            'Entendo. Vou transferir você para um técnico especializado que poderá resolver seu problema.\n\nNúmero do chamado: #' + ticketId.slice(0, 8),
+            `Seu chamado foi encaminhado para nossa equipe técnica. Um especialista entrará em contato em breve.\n\nNúmero do chamado: #${ticketId.slice(0, 8)}`,
             'ai',
             'A.I Assistant'
           );
+        } else {
+          setConversationStep(1);
         }
+        setIsLoading(false);
+      }, 1500);
+    } else {
+      // Etapa de acompanhamento/resolução
+      const aiResponse = await getAIResponse(ticketId, userMessage);
+      setTimeout(async () => {
+        await addMessage(aiResponse.text, 'ai', 'A.I Assistant');
+
+        if (aiResponse.requiresHuman) {
+          await supabase
+            .from('tickets')
+            .update({ status: 'in_progress' })
+            .eq('id', ticketId);
+        } else {
+          await supabase
+            .from('tickets')
+            .update({ status: 'resolved', resolved_at: new Date().toISOString() })
+            .eq('id', ticketId);
+        }
+
         setIsLoading(false);
       }, 1500);
     }
   };
 
-  if (!lgpdAccepted) {
-    return <LGPDModal onAccept={handleLGPDAccept} />;
-  }
+  if (!lgpdAccepted) return <LGPDModal onAccept={handleLGPDAccept} />;
 
   if (showNameForm) {
     return (
@@ -267,9 +241,9 @@ export const ClientPage: React.FC = () => {
               <div className="flex justify-start mb-4">
                 <div className="bg-gray-200 rounded-2xl px-4 py-3">
                   <div className="flex gap-2">
-                    <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                    <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                    <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                    <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" />
+                    <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                    <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                   </div>
                 </div>
               </div>
@@ -301,3 +275,4 @@ export const ClientPage: React.FC = () => {
     </div>
   );
 };
+
