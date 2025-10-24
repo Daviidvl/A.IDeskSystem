@@ -44,7 +44,6 @@ export const ClientPage: React.FC = () => {
         prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]
       );
 
-      // Detecta mensagem de encerramento → abre feedback
       if (
         typeof msg.content === "string" &&
         msg.content.includes("✅ Seu chamado foi encerrado")
@@ -159,32 +158,34 @@ export const ClientPage: React.FC = () => {
     setInputMessage("");
     setIsLoading(true);
 
-    // Cliente envia mensagem
     await addMessage(userMessage, "client", clientName);
 
-    // Só chama IA se ticketId for string
-    if (typeof ticketId === "string") {
-      const aiResponse = await getAIResponse(ticketId, userMessage);
+    const aiResponse = await getAIResponse(ticketId, userMessage);
 
-      // Se a IA ainda puder responder
-      if (aiResponse.text) {
-        setTimeout(async () => {
-          await addMessage(aiResponse.text!, "ai", "A.I Assistant");
-
-          // IA decide escalar → atualiza ticket
-          if (aiResponse.requiresHuman) {
-            await supabase
-              .from("tickets")
-              .update({ status: "in_progress" })
-              .eq("id", ticketId);
-          }
-
-          setIsLoading(false);
-        }, 1200);
-      } else {
-        // IA bloqueada (escalado)
+    // Se a IA ainda puder responder normalmente
+    if (aiResponse && aiResponse.text && !aiResponse.requiresHuman) {
+      setTimeout(async () => {
+        await addMessage(aiResponse.text!, "ai", "A.I Assistant");
         setIsLoading(false);
-      }
+      }, 1200);
+    }
+
+    // 🔹 Caso a IA decida encaminhar ao técnico
+    else if (aiResponse && aiResponse.requiresHuman) {
+      const finalMsg = aiResponse.text!;
+      await addMessage(finalMsg, "ai", "A.I Assistant");
+
+      // Atualiza ticket no banco
+      await supabase
+        .from("tickets")
+        .update({ status: "in_progress" })
+        .eq("id", ticketId);
+
+      // Emite evento pro socket → técnico vê o novo ticket
+
+      setIsLoading(false);
+    } else {
+      setIsLoading(false);
     }
   };
 

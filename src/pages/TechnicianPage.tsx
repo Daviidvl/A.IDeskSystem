@@ -77,15 +77,15 @@ export const TechnicianPage: React.FC = () => {
 
   // === SOCKET.IO realtime ===
   useEffect(() => {
-    const socket = initSocket();
+    initSocket();
 
-    // Novo ticket criado → atualiza lista
     onNewMessage((msg) => {
+      // Atualiza tickets quando há novos
       if (msg?.sender_type === "system" && msg?.content?.includes("Novo ticket")) {
         loadTickets();
       }
 
-      // Se a msg for do ticket aberto → adiciona ao chat
+      // Se a mensagem for do ticket atual, adiciona
       if (selectedTicket && msg.ticket_id === selectedTicket.id) {
         setMessages((prev) =>
           prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]
@@ -93,7 +93,7 @@ export const TechnicianPage: React.FC = () => {
       }
     });
 
-    // Quando um ticket é encerrado → remove da tela
+    // Quando um ticket é encerrado por outro técnico
     onTicketResolved(({ ticketId }) => {
       setTickets((prev) => prev.filter((t) => t.id !== ticketId));
 
@@ -192,11 +192,13 @@ export const TechnicianPage: React.FC = () => {
       sendSocketMessage(selectedTicket.id, msgData);
     }
 
-    // Notifica via socket que foi encerrado
-    const socket = initSocket();
-    socket.emit("ticket_resolved", { ticketId: selectedTicket.id });
+    // Notifica via socket global
+    sendSocketMessage(selectedTicket.id, {
+      type: "ticket_resolved",
+      ticketId: selectedTicket.id,
+    });
 
-    // Remove o ticket imediatamente
+    // Remove o ticket localmente
     setTickets((prev) => prev.filter((t) => t.id !== selectedTicket.id));
     setSelectedTicket(null);
 
