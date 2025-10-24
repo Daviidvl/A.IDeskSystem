@@ -30,7 +30,7 @@ export const ClientPage: React.FC = () => {
   const scrollToBottom = () =>
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
 
-  // SOCKET: conexão e listener
+  // === SOCKET ===
   useEffect(() => {
     if (!ticketId) return;
 
@@ -38,12 +38,13 @@ export const ClientPage: React.FC = () => {
     joinTicket(ticketId);
 
     const handleNew = (msg: any) => {
-      if (msg.ticket_id && msg.ticket_id !== ticketId) return;
+      if (!msg?.ticket_id || msg.ticket_id !== ticketId) return;
+
       setMessages((prev) =>
         prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]
       );
 
-      // Detecta mensagem de encerramento e abre o feedback
+      // Detecta mensagem de encerramento → abre feedback
       if (
         typeof msg.content === "string" &&
         msg.content.includes("✅ Seu chamado foi encerrado")
@@ -58,13 +59,14 @@ export const ClientPage: React.FC = () => {
 
   useEffect(scrollToBottom, [messages]);
 
-  // Inserir mensagem no banco e enviar via socket
+  // === Inserir mensagem no banco e emitir pelo socket ===
   const addMessage = async (
     content: string,
     senderType: "client" | "ai" | "technician",
     senderName: string
   ) => {
     if (!ticketId) return;
+
     const { data, error } = await supabase
       .from("messages")
       .insert({
@@ -76,7 +78,12 @@ export const ClientPage: React.FC = () => {
       .select()
       .single();
 
-    if (data && !error) {
+    if (error) {
+      console.error("Erro ao inserir mensagem:", error);
+      return null;
+    }
+
+    if (data) {
       setMessages((prev) => [...prev, data]);
       try {
         sendSocketMessage(ticketId, data);
@@ -89,7 +96,7 @@ export const ClientPage: React.FC = () => {
 
   const handleLGPDAccept = () => setLgpdAccepted(true);
 
-  // Criação do ticket inicial
+  // === Criar ticket inicial ===
   const handleStartChat = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!clientName.trim()) return;
@@ -97,7 +104,7 @@ export const ClientPage: React.FC = () => {
     setShowNameForm(false);
     setIsLoading(true);
 
-    const { data: ticket } = await supabase
+    const { data: ticket, error } = await supabase
       .from("tickets")
       .insert({
         client_name: clientName,
@@ -109,8 +116,24 @@ export const ClientPage: React.FC = () => {
       .select()
       .single();
 
+    if (error) {
+      console.error("Erro ao criar ticket:", error);
+      alert("Erro ao iniciar atendimento. Tente novamente.");
+      setIsLoading(false);
+      return;
+    }
+
     if (ticket) {
       setTicketId(ticket.id);
+
+      // Envia para o socket (avisar técnicos)
+      sendSocketMessage(ticket.id, {
+        ticket_id: ticket.id,
+        sender_type: "system",
+        sender_name: "Sistema",
+        content: "Novo ticket criado pelo cliente.",
+      });
+
       const welcomeMsg: Message = {
         id: crypto.randomUUID(),
         ticket_id: ticket.id,
@@ -119,13 +142,15 @@ export const ClientPage: React.FC = () => {
         content: `Olá ${clientName}! 👋\nSou o assistente virtual da A.I Desk. Descreva brevemente o problema que está enfrentando.`,
         created_at: new Date().toISOString(),
       };
+
       setMessages([welcomeMsg]);
       await addMessage(welcomeMsg.content, "ai", "A.I Assistant");
     }
+
     setIsLoading(false);
   };
 
-  // Enviar mensagem e gerenciar etapas
+  // === Enviar mensagem normal ===
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputMessage.trim() || !ticketId || isLoading) return;
@@ -133,32 +158,48 @@ export const ClientPage: React.FC = () => {
     const userMessage = inputMessage;
     setInputMessage("");
     setIsLoading(true);
+
+    // Cliente envia mensagem
     await addMessage(userMessage, "client", clientName);
 
-    const aiResponse = await getAIResponse(ticketId, userMessage);
-    setTimeout(async () => {
-      await addMessage(aiResponse.text, "ai", "A.I Assistant");
+    // Só chama IA se ticketId for string
+    if (typeof ticketId === "string") {
+      const aiResponse = await getAIResponse(ticketId, userMessage);
 
-      if (aiResponse.requiresHuman) {
-        await supabase
-          .from("tickets")
-          .update({ status: "in_progress" })
-          .eq("id", ticketId);
+      // Se a IA ainda puder responder
+      if (aiResponse.text) {
+        setTimeout(async () => {
+          await addMessage(aiResponse.text!, "ai", "A.I Assistant");
+
+          // IA decide escalar → atualiza ticket
+          if (aiResponse.requiresHuman) {
+            await supabase
+              .from("tickets")
+              .update({ status: "in_progress" })
+              .eq("id", ticketId);
+          }
+
+          setIsLoading(false);
+        }, 1200);
+      } else {
+        // IA bloqueada (escalado)
+        setIsLoading(false);
       }
-
-      setIsLoading(false);
-    }, 1500);
+    }
   };
 
-  // Enviar avaliação
+  // === Enviar avaliação ===
   const handleSendFeedback = async () => {
     if (!rating || !ticketId) return;
+
     await supabase.from("feedbacks").insert({
       ticket_id: ticketId,
       rating,
       comment,
     });
+
     setFeedbackSent(true);
+
     await addMessage(
       "✅ Obrigado pelo seu feedback! Ele nos ajuda a melhorar sempre. 💙",
       "ai",
@@ -167,7 +208,6 @@ export const ClientPage: React.FC = () => {
   };
 
   // === RENDER ===
-
   if (!lgpdAccepted) return <LGPDModal onAccept={handleLGPDAccept} />;
 
   if (showNameForm) {
