@@ -32,16 +32,40 @@ export const onNewMessage = (callback: (message: any) => void) => {
   socket.on("new_message", callback);
 };
 
-// 🔹 Novo: emitir evento quando técnico encerra
+// 🔹 Evento quando técnico encerra ticket
 export const sendTicketResolved = (ticketId: string) => {
   if (!socket) return;
   socket.emit("ticket_resolved", { ticketId });
 };
 
-// 🔹 Novo: ouvir evento de encerramento
+// 🔹 Evento quando IA resolve automaticamente
+export const sendTicketAutoResolved = (ticketId: string) => {
+  if (!socket) return;
+  socket.emit("ticket_auto_resolved", { ticketId });
+};
+
+// 🔹 Ouvir evento de encerramento por técnico
 export const onTicketResolved = (callback: (payload: { ticketId: string }) => void) => {
   if (!socket) return;
   socket.on("ticket_resolved", callback);
+};
+
+// 🔹 NOVO: Ouvir evento de resolução automática pela IA
+export const onTicketAutoResolved = (callback: (payload: { ticketId: string }) => void) => {
+  if (!socket) return;
+  socket.on("ticket_auto_resolved", callback);
+};
+
+// 🔹 NOVO: Evento quando ticket é assumido por técnico
+export const sendTicketAssumed = (ticketId: string, technicianName: string) => {
+  if (!socket) return;
+  socket.emit("ticket_assumed", { ticketId, technicianName });
+};
+
+// 🔹 NOVO: Ouvir quando ticket é assumido
+export const onTicketAssumed = (callback: (payload: { ticketId: string; technicianName: string }) => void) => {
+  if (!socket) return;
+  socket.on("ticket_assumed", callback);
 };
 
 export const disconnectSocket = () => {
@@ -50,4 +74,3 @@ export const disconnectSocket = () => {
     socket = null;
   }
 };
-

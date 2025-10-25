@@ -3,13 +3,14 @@ import { Send, MessageSquare, Star } from "lucide-react";
 import { LGPDModal } from "../components/LGPDModal";
 import { ChatMessage } from "../components/ChatMessage";
 import { supabase, Message } from "../lib/supabase";
-import { getAIResponse } from "../lib/aiResponses";
+import { getAIResponse } from "../lib/aiResponses"; // 🔹 Removido isTicketAutoResolved
 import {
   initSocket,
   joinTicket,
   sendSocketMessage,
   onNewMessage,
   disconnectSocket,
+  onTicketAssumed,
 } from "../lib/socket";
 
 export const ClientPage: React.FC = () => {
@@ -25,10 +26,37 @@ export const ClientPage: React.FC = () => {
   const [rating, setRating] = useState<number | null>(null);
   const [comment, setComment] = useState("");
   const [feedbackSent, setFeedbackSent] = useState(false);
+  const [currentTicketStatus, setCurrentTicketStatus] = useState<'open' | 'in_progress' | 'closed'>('open');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () =>
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+
+  // === Monitora status do ticket ===
+  useEffect(() => {
+    if (!ticketId) return;
+
+    const checkTicketStatus = async () => {
+      const { data } = await supabase
+        .from('tickets')
+        .select('status')
+        .eq('id', ticketId)
+        .single();
+      
+      if (data) {
+        setCurrentTicketStatus(data.status);
+        
+        // 🔹 SE TICKET FOI FECHADO → MOSTRA FEEDBACK
+        if (data.status === 'closed' && !showFeedback && !feedbackSent) {
+          setTimeout(() => setShowFeedback(true), 1000);
+        }
+      }
+    };
+
+    checkTicketStatus();
+    const interval = setInterval(checkTicketStatus, 3000);
+    return () => clearInterval(interval);
+  }, [ticketId, showFeedback, feedbackSent]);
 
   // === SOCKET ===
   useEffect(() => {
@@ -37,24 +65,47 @@ export const ClientPage: React.FC = () => {
     initSocket();
     joinTicket(ticketId);
 
-    const handleNew = (msg: any) => {
+    const handleNewMessage = (msg: any) => {
       if (!msg?.ticket_id || msg.ticket_id !== ticketId) return;
 
-      setMessages((prev) =>
-        prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]
-      );
+      // 🔹 IGNORA mensagens do próprio cliente
+      if (msg.sender_type === 'client') return;
+      
+      // 🔹 IGNORA se já existe no estado local
+      if (messages.some(m => m.id === msg.id)) return;
 
-      if (
-        typeof msg.content === "string" &&
-        msg.content.includes("✅ Seu chamado foi encerrado")
-      ) {
+      setMessages((prev) => [...prev, msg]);
+
+      // Se for mensagem de encerramento
+      if (typeof msg.content === "string" && msg.content.includes("✅ Seu chamado foi encerrado")) {
         setTimeout(() => setShowFeedback(true), 2000);
       }
     };
 
-    onNewMessage(handleNew);
+    // 🔹 OUVE QUANDO TÉCNICO ASSUME O TICKET
+    const handleTicketAssumed = (payload: { ticketId: string; technicianName: string }) => {
+      if (payload.ticketId === ticketId) {
+        setCurrentTicketStatus('in_progress');
+        
+        // Adiciona mensagem informando que técnico assumiu
+        const systemMsg = {
+          id: crypto.randomUUID(),
+          ticket_id: ticketId,
+          sender_type: "ai" as const, // 🔹 CORRIGIDO: mudado de "system" para "ai"
+          sender_name: "Sistema",
+          content: `✅ ${payload.technicianName} assumiu seu caso. Agora você está em contato direto com nosso técnico!`,
+          created_at: new Date().toISOString(),
+        };
+        
+        setMessages((prev) => [...prev, systemMsg]);
+      }
+    };
+
+    onNewMessage(handleNewMessage);
+    onTicketAssumed(handleTicketAssumed);
+
     return () => disconnectSocket();
-  }, [ticketId]);
+  }, [ticketId, messages]);
 
   useEffect(scrollToBottom, [messages]);
 
@@ -64,7 +115,7 @@ export const ClientPage: React.FC = () => {
     senderType: "client" | "ai" | "technician",
     senderName: string
   ) => {
-    if (!ticketId) return;
+    if (!ticketId) return null;
 
     const { data, error } = await supabase
       .from("messages")
@@ -91,6 +142,7 @@ export const ClientPage: React.FC = () => {
       }
       return data;
     }
+    return null;
   };
 
   const handleLGPDAccept = () => setLgpdAccepted(true);
@@ -124,11 +176,12 @@ export const ClientPage: React.FC = () => {
 
     if (ticket) {
       setTicketId(ticket.id);
+      setCurrentTicketStatus('open');
 
       // Envia para o socket (avisar técnicos)
       sendSocketMessage(ticket.id, {
         ticket_id: ticket.id,
-        sender_type: "system",
+        sender_type: "ai" as const, // 🔹 CORRIGIDO: mudado de "system" para "ai"
         sender_name: "Sistema",
         content: "Novo ticket criado pelo cliente.",
       });
@@ -152,39 +205,68 @@ export const ClientPage: React.FC = () => {
   // === Enviar mensagem normal ===
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
+    
     if (!inputMessage.trim() || !ticketId || isLoading) return;
 
     const userMessage = inputMessage;
     setInputMessage("");
     setIsLoading(true);
 
-    await addMessage(userMessage, "client", clientName);
+    // Se o ticket ainda está com a IA
+    if (currentTicketStatus === 'open') {
+      await addMessage(userMessage, "client", clientName);
 
-    const aiResponse = await getAIResponse(ticketId, userMessage);
+      const aiResponse = await getAIResponse(ticketId, userMessage);
 
-    // Se a IA ainda puder responder normalmente
-    if (aiResponse && aiResponse.text && !aiResponse.requiresHuman) {
-      setTimeout(async () => {
-        await addMessage(aiResponse.text!, "ai", "A.I Assistant");
+      // 🔹 SE A IA RESOLVEU AUTOMATICAMENTE → MOSTRA FEEDBACK
+      if (aiResponse.autoResolved) {
+        setTimeout(async () => {
+          await addMessage(aiResponse.text!, "ai", "A.I Assistant");
+          
+          // Atualiza ticket para resolvido
+          await supabase
+            .from("tickets")
+            .update({ 
+              status: "closed",
+              resolved_at: new Date().toISOString()
+            })
+            .eq("id", ticketId);
+
+          setCurrentTicketStatus('closed');
+          
+          // Mostra feedback imediatamente
+          setTimeout(() => setShowFeedback(true), 1500);
+          setIsLoading(false);
+        }, 1200);
+      }
+      // Se a IA ainda puder responder normalmente
+      else if (aiResponse && aiResponse.text && !aiResponse.requiresHuman) {
+        setTimeout(async () => {
+          await addMessage(aiResponse.text!, "ai", "A.I Assistant");
+          setIsLoading(false);
+        }, 1200);
+      }
+      // 🔹 CASO A IA DECIDA ENCAMINHAR AO TÉCNICO
+      else if (aiResponse && aiResponse.requiresHuman) {
+        const finalMsg = aiResponse.text!;
+        await addMessage(finalMsg, "ai", "A.I Assistant");
+
+        // Atualiza ticket no banco para in_progress
+        await supabase
+          .from("tickets")
+          .update({ status: "in_progress" })
+          .eq("id", ticketId);
+
+        setCurrentTicketStatus('in_progress');
         setIsLoading(false);
-      }, 1200);
-    }
-
-    // 🔹 Caso a IA decida encaminhar ao técnico
-    else if (aiResponse && aiResponse.requiresHuman) {
-      const finalMsg = aiResponse.text!;
-      await addMessage(finalMsg, "ai", "A.I Assistant");
-
-      // Atualiza ticket no banco
-      await supabase
-        .from("tickets")
-        .update({ status: "in_progress" })
-        .eq("id", ticketId);
-
-      // Emite evento pro socket → técnico vê o novo ticket
-
-      setIsLoading(false);
-    } else {
+      } else {
+        setIsLoading(false);
+      }
+    } 
+    // Se o ticket já está com o técnico
+    else if (currentTicketStatus === 'in_progress') {
+      // Cliente envia mensagem diretamente para o técnico
+      await addMessage(userMessage, "client", clientName);
       setIsLoading(false);
     }
   };
@@ -275,6 +357,19 @@ export const ClientPage: React.FC = () => {
             {ticketId && (
               <p className="text-xs opacity-75 mt-1">
                 Chamado: #{ticketId.slice(0, 8)}
+                <span className={`ml-2 px-2 py-1 rounded-full text-xs font-semibold ${
+                  currentTicketStatus === 'open' 
+                    ? 'bg-yellow-100 text-yellow-800' 
+                    : currentTicketStatus === 'in_progress'
+                    ? 'bg-blue-100 text-blue-800'
+                    : 'bg-green-100 text-green-800'
+                }`}>
+                  {currentTicketStatus === 'open' 
+                    ? 'EM ATENDIMENTO IA' 
+                    : currentTicketStatus === 'in_progress'
+                    ? 'COM TÉCNICO'
+                    : 'FINALIZADO'}
+                </span>
               </p>
             )}
           </div>
@@ -352,14 +447,18 @@ export const ClientPage: React.FC = () => {
             <div ref={messagesEndRef} />
           </div>
 
-          {!showFeedback && (
+          {!showFeedback && currentTicketStatus !== 'closed' && (
             <div className="p-4 bg-white border-t">
               <form onSubmit={handleSendMessage} className="flex gap-2">
                 <input
                   type="text"
                   value={inputMessage}
                   onChange={(e) => setInputMessage(e.target.value)}
-                  placeholder="Digite sua mensagem..."
+                  placeholder={
+                    currentTicketStatus === 'open' 
+                      ? "Digite sua mensagem para a IA..." 
+                      : "Digite sua mensagem para o técnico..."
+                  }
                   disabled={isLoading}
                   className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50"
                 />
@@ -371,6 +470,20 @@ export const ClientPage: React.FC = () => {
                   <Send className="w-6 h-6" />
                 </button>
               </form>
+              
+              {currentTicketStatus === 'in_progress' && (
+                <p className="text-xs text-green-600 mt-2 text-center">
+                  💬 Agora você está em contato direto com nosso técnico
+                </p>
+              )}
+            </div>
+          )}
+
+          {currentTicketStatus === 'closed' && !showFeedback && !feedbackSent && (
+            <div className="p-4 bg-gray-100 border-t text-center">
+              <p className="text-gray-600">
+                Este chamado foi encerrado. Obrigado por entrar em contato!
+              </p>
             </div>
           )}
         </div>
