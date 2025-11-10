@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { Activity, CheckCircle, Clock, AlertCircle } from 'lucide-react';
+import { Activity, CheckCircle, Clock, AlertCircle, MessageSquare, ArrowLeft } from 'lucide-react';
 import { supabase, Ticket } from '../lib/supabase';
+import { useNavigate } from 'react-router-dom';
 
 interface Stats {
   totalTickets: number;
@@ -21,6 +22,7 @@ export const DashboardPage: React.FC = () => {
   });
 
   const [ticketsByDay, setTicketsByDay] = useState<any[]>([]);
+  const navigate = useNavigate();
 
   useEffect(() => {
     loadStats();
@@ -74,6 +76,14 @@ export const DashboardPage: React.FC = () => {
     }
   };
 
+  const goToTechnician = () => {
+    navigate('/tecnico');
+  };
+
+  const goBack = () => {
+    navigate(-1);
+  };
+
   const statusData = [
     { name: 'Abertos', value: stats.openTickets, color: '#FCD34D' },
     { name: 'Em Atendimento', value: stats.inProgressTickets, color: '#60A5FA' },
@@ -82,14 +92,36 @@ export const DashboardPage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50">
+      {/* Header com navegação */}
       <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-6 shadow-lg">
         <div className="max-w-7xl mx-auto">
-          <h1 className="text-3xl font-bold">Dashboard A.I Desk</h1>
-          <p className="text-sm opacity-90 mt-1">Visão geral do sistema de chamados</p>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <button
+                onClick={goBack}
+                className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+                title="Voltar"
+              >
+                <ArrowLeft className="w-6 h-6" />
+              </button>
+              <div>
+                <h1 className="text-3xl font-bold">Dashboard A.I Desk</h1>
+                <p className="text-sm opacity-90 mt-1">Visão geral do sistema de chamados</p>
+              </div>
+            </div>
+            <button
+              onClick={goToTechnician}
+              className="bg-white text-blue-600 px-6 py-2 rounded-lg font-semibold hover:bg-blue-50 transition-colors flex items-center gap-2"
+            >
+              <MessageSquare className="w-5 h-5" />
+              Painel do Técnico
+            </button>
+          </div>
         </div>
       </div>
 
       <div className="max-w-7xl mx-auto p-6">
+        {/* Cards de Estatísticas */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
           <div className="bg-white rounded-xl shadow-lg p-6 border-l-4 border-blue-500">
             <div className="flex items-center justify-between">
@@ -132,6 +164,7 @@ export const DashboardPage: React.FC = () => {
           </div>
         </div>
 
+        {/* Gráficos */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
           <div className="bg-white rounded-xl shadow-lg p-6">
             <h2 className="text-xl font-bold text-gray-900 mb-6">Chamados nos Últimos 7 Dias</h2>
@@ -172,6 +205,7 @@ export const DashboardPage: React.FC = () => {
           </div>
         </div>
 
+        {/* Métricas de Desempenho */}
         <div className="bg-white rounded-xl shadow-lg p-6">
           <h2 className="text-xl font-bold text-gray-900 mb-4">Métricas de Desempenho</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -196,6 +230,23 @@ export const DashboardPage: React.FC = () => {
               </p>
               <p className="text-sm text-gray-600 mt-1">aguardando</p>
             </div>
+          </div>
+        </div>
+
+        {/* Ação Rápida */}
+        <div className="bg-white rounded-xl shadow-lg p-6 mt-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900">Precisa atender chamados?</h3>
+              <p className="text-gray-600 mt-1">Acesse o painel do técnico para começar o atendimento</p>
+            </div>
+            <button
+              onClick={goToTechnician}
+              className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white px-6 py-3 rounded-lg font-semibold transition-all duration-200 shadow-lg hover:shadow-xl flex items-center gap-2"
+            >
+              <MessageSquare className="w-5 h-5" />
+              Ir para Atendimento
+            </button>
           </div>
         </div>
       </div>

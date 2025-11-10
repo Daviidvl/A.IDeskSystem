@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
-import { Send, CheckCircle, MessageSquare, XCircle, User, Clock } from "lucide-react";
+import { Send, CheckCircle, MessageSquare, XCircle, User, Clock, LogOut, BarChart3 } from "lucide-react";
 import { supabase, Message } from "../lib/supabase";
 import { ChatMessage } from "../components/ChatMessage";
 import {
@@ -12,6 +12,7 @@ import {
   onTicketAutoResolved,
   sendTicketAssumed,
 } from "../lib/socket";
+import { useNavigate } from "react-router-dom";
 
 // === Exibe o status formatado ===
 const getStatusDisplay = (status: string) => {
@@ -33,7 +34,18 @@ export const TechnicianPage: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [currentUser, setCurrentUser] = useState<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
+
+  // === Carregar usuário atual ===
+  useEffect(() => {
+    const getUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      setCurrentUser(user);
+    };
+    getUser();
+  }, []);
 
   // === Carrega todos os tickets abertos ou em andamento ===
   const loadTickets = async () => {
@@ -67,8 +79,7 @@ export const TechnicianPage: React.FC = () => {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "tickets" },
-        async (payload: any) => { // 🔹 CORRIGIDO: adicionado tipo any
-          // 🔹 SE TICKET FOI FECHADO → REMOVE DA LISTA
+        async (payload: any) => {
           if (payload.eventType === 'UPDATE' && payload.new.status === 'closed') {
             setTickets(prev => prev.filter(t => t.id !== payload.new.id));
             if (selectedTicket?.id === payload.new.id) {
@@ -83,8 +94,7 @@ export const TechnicianPage: React.FC = () => {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "messages" },
-        (payload: any) => { // 🔹 CORRIGIDO: adicionado tipo any
-          // Se há nova mensagem no ticket selecionado, recarrega as mensagens
+        (payload: any) => {
           if (selectedTicket && payload.new.ticket_id === selectedTicket.id) {
             loadMessages(selectedTicket.id);
           }
@@ -102,12 +112,10 @@ export const TechnicianPage: React.FC = () => {
     initSocket();
 
     const handleNewMessage = (msg: any) => {
-      // Atualiza tickets quando há novos tickets criados
       if (msg?.sender_type === "ai" && msg?.content?.includes("Novo ticket")) {
         loadTickets();
       }
 
-      // Se a mensagem for do ticket atual, adiciona
       if (selectedTicket && msg.ticket_id === selectedTicket.id) {
         setMessages((prev) =>
           prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]
@@ -115,7 +123,6 @@ export const TechnicianPage: React.FC = () => {
       }
     };
 
-    // 🔹 OUVE QUANDO TICKET É RESOLVIDO AUTOMATICAMENTE PELA IA
     const handleTicketAutoResolved = (payload: { ticketId: string }) => {
       setTickets(prev => prev.filter(t => t.id !== payload.ticketId));
       if (selectedTicket?.id === payload.ticketId) {
@@ -124,7 +131,6 @@ export const TechnicianPage: React.FC = () => {
       }
     };
 
-    // 🔹 OUVE QUANDO TICKET É ENCERRADO POR OUTRO TÉCNICO
     const handleTicketResolved = (payload: { ticketId: string }) => {
       setTickets(prev => prev.filter(t => t.id !== payload.ticketId));
       if (selectedTicket?.id === payload.ticketId) {
@@ -146,7 +152,6 @@ export const TechnicianPage: React.FC = () => {
     await loadMessages(ticket.id);
     joinTicket(ticket.id);
 
-    // 🔹 ATUALIZA o status para in_progress se ainda estiver open
     if (ticket.status === "open") {
       const { data, error } = await supabase
         .from("tickets")
@@ -159,7 +164,6 @@ export const TechnicianPage: React.FC = () => {
         setSelectedTicket(data);
         loadTickets();
         
-        // 🔹 ENVIA MENSAGEM DE BOAS-VINDAS do técnico
         const welcomeMsg = {
           ticket_id: ticket.id,
           sender_type: "technician" as const,
@@ -178,7 +182,6 @@ export const TechnicianPage: React.FC = () => {
           sendSocketMessage(ticket.id, msgData);
         }
 
-        // 🔹 NOTIFICA VIA SOCKET QUE TÉCNICO ASSUMIU O TICKET
         sendTicketAssumed(ticket.id, "Técnico");
       }
     }
@@ -207,14 +210,12 @@ export const TechnicianPage: React.FC = () => {
       setMessages((prev) => [...prev, data]);
       sendSocketMessage(selectedTicket.id, data);
       
-      // 🔹 ATUALIZA o status para in_progress se ainda estiver open
       if (selectedTicket.status === 'open') {
         await supabase
           .from("tickets")
           .update({ status: "in_progress" })
           .eq("id", selectedTicket.id);
         
-        // Recarrega o ticket selecionado
         const { data: updatedTicket } = await supabase
           .from("tickets")
           .select("*")
@@ -236,7 +237,6 @@ export const TechnicianPage: React.FC = () => {
   const handleCloseTicket = async () => {
     if (!selectedTicket) return;
 
-    // Confirmação antes de encerrar
     if (!confirm("Tem certeza que deseja encerrar este chamado? Esta ação não pode ser desfeita.")) {
       return;
     }
@@ -254,7 +254,6 @@ export const TechnicianPage: React.FC = () => {
       return;
     }
 
-    // Mensagem de encerramento
     const feedbackMsg = {
       ticket_id: selectedTicket.id,
       sender_type: "ai" as const,
@@ -273,13 +272,11 @@ export const TechnicianPage: React.FC = () => {
       sendSocketMessage(selectedTicket.id, msgData);
     }
 
-    // Notifica via socket global
     sendSocketMessage(selectedTicket.id, {
-      ticket_id: selectedTicket.id, // 🔹 CORRIGIDO: adicionado ticket_id
+      ticket_id: selectedTicket.id,
       type: "ticket_resolved",
     });
 
-    // Remove o ticket localmente
     setTickets((prev) => prev.filter((t) => t.id !== selectedTicket.id));
     setSelectedTicket(null);
     setMessages([]);
@@ -292,6 +289,17 @@ export const TechnicianPage: React.FC = () => {
     setSelectedTicket(null);
     setMessages([]);
     setInputMessage("");
+  };
+
+  // === Logout ===
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    navigate('/login');
+  };
+
+  // === Ir para Dashboard ===
+  const goToDashboard = () => {
+    navigate('/dashboard');
   };
 
   // === Scroll automático ===
@@ -314,8 +322,26 @@ export const TechnicianPage: React.FC = () => {
       {/* ==== Sidebar ==== */}
       <div className="w-1/4 bg-white border-r overflow-y-auto flex flex-col">
         <div className="p-4 border-b bg-gradient-to-r from-blue-600 to-purple-600 text-white">
-          <h2 className="text-xl font-bold">Tickets Ativos</h2>
-          <div className="flex gap-4 mt-2 text-xs">
+          <div className="flex justify-between items-center mb-3">
+            <h2 className="text-xl font-bold">Tickets Ativos</h2>
+            <div className="flex gap-2">
+              <button
+                onClick={goToDashboard}
+                className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+                title="Dashboard"
+              >
+                <BarChart3 className="w-5 h-5" />
+              </button>
+              <button
+                onClick={handleLogout}
+                className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+                title="Sair"
+              >
+                <LogOut className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+          <div className="flex gap-4 text-xs">
             <div className="flex items-center gap-1">
               <Clock className="w-3 h-3" />
               <span>{stats.waiting} Aguardando</span>
@@ -325,6 +351,9 @@ export const TechnicianPage: React.FC = () => {
               <span>{stats.inProgress} Em Atendimento</span>
             </div>
           </div>
+          <p className="text-xs opacity-75 mt-2 truncate">
+            {currentUser?.email}
+          </p>
         </div>
 
         {tickets.length === 0 ? (
@@ -332,7 +361,7 @@ export const TechnicianPage: React.FC = () => {
             <MessageSquare className="w-16 h-16 text-gray-300 mb-4" />
             <p className="text-gray-500 font-medium">Nenhum ticket ativo</p>
             <p className="text-gray-400 text-sm mt-2">
-              Todos os casos foram resolvidos pela IA ou técnicos
+              Todos os casos foram resolvidos
             </p>
           </div>
         ) : (
@@ -531,6 +560,17 @@ export const TechnicianPage: React.FC = () => {
                 <div className="text-sm text-purple-700 font-medium">Total Ativos</div>
                 <div className="text-xs text-purple-600 mt-1">Tickets em aberto</div>
               </div>
+            </div>
+            
+            {/* Botão para Dashboard */}
+            <div className="mt-8">
+              <button
+                onClick={goToDashboard}
+                className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white px-6 py-3 rounded-lg font-semibold transition-all duration-200 shadow-lg hover:shadow-xl flex items-center gap-2"
+              >
+                <BarChart3 className="w-5 h-5" />
+                Ver Dashboard
+              </button>
             </div>
           </div>
         )}
