@@ -3,7 +3,7 @@ import { Send, MessageSquare, Star } from "lucide-react";
 import { LGPDModal } from "../components/LGPDModal";
 import { ChatMessage } from "../components/ChatMessage";
 import { supabase, Message } from "../lib/supabase";
-import { getAIResponse } from "../lib/aiResponses"; // 🔹 Removido isTicketAutoResolved
+import { getAIResponse } from "../lib/aiResponses";
 import {
   initSocket,
   joinTicket,
@@ -28,6 +28,9 @@ export const ClientPage: React.FC = () => {
   const [feedbackSent, setFeedbackSent] = useState(false);
   const [currentTicketStatus, setCurrentTicketStatus] = useState<'open' | 'in_progress' | 'closed'>('open');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  
+  // 🔹 NOVO: Ref para controlar reconexões do socket
+  const socketConnectedRef = useRef(false);
 
   const scrollToBottom = () =>
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -46,7 +49,6 @@ export const ClientPage: React.FC = () => {
       if (data) {
         setCurrentTicketStatus(data.status);
         
-        // 🔹 SE TICKET FOI FECHADO → MOSTRA FEEDBACK
         if (data.status === 'closed' && !showFeedback && !feedbackSent) {
           setTimeout(() => setShowFeedback(true), 1000);
         }
@@ -58,40 +60,61 @@ export const ClientPage: React.FC = () => {
     return () => clearInterval(interval);
   }, [ticketId, showFeedback, feedbackSent]);
 
-  // === SOCKET ===
+  // === SOCKET CORRIGIDO ===
   useEffect(() => {
     if (!ticketId) return;
 
+    // 🔹 EVITA reconexões desnecessárias
+    if (socketConnectedRef.current) {
+      console.log("🔌 Socket já conectado, ignorando nova conexão");
+      return;
+    }
+
+    console.log("🔌 Conectando socket para ticket:", ticketId);
     initSocket();
     joinTicket(ticketId);
+    socketConnectedRef.current = true;
 
     const handleNewMessage = (msg: any) => {
-      if (!msg?.ticket_id || msg.ticket_id !== ticketId) return;
-
-      // 🔹 IGNORA mensagens do próprio cliente
-      if (msg.sender_type === 'client') return;
+      console.log("📨 Nova mensagem recebida no cliente:", msg);
       
-      // 🔹 IGNORA se já existe no estado local
-      if (messages.some(m => m.id === msg.id)) return;
+      if (!msg?.ticket_id || msg.ticket_id !== ticketId) {
+        console.log("❌ Mensagem ignorada - ticket não corresponde");
+        return;
+      }
+      
+      // 🔹 VERIFICAÇÃO MAIS ROBUSTA para evitar duplicatas
+      if (messages.some(m => m.id === msg.id)) {
+        console.log("❌ Mensagem ignorada - já existe no estado");
+        return;
+      }
 
-      setMessages((prev) => [...prev, msg]);
+      console.log("✅ Adicionando mensagem ao estado");
+      
+      // 🔹 USA FUNÇÃO DE ATUALIZAÇÃO para garantir estado correto
+      setMessages((prev) => {
+        // Verificação dupla dentro da função de atualização
+        if (prev.some(m => m.id === msg.id)) {
+          console.log("❌ Mensagem duplicada detectada na função de atualização");
+          return prev;
+        }
+        return [...prev, msg];
+      });
 
-      // Se for mensagem de encerramento
       if (typeof msg.content === "string" && msg.content.includes("✅ Seu chamado foi encerrado")) {
         setTimeout(() => setShowFeedback(true), 2000);
       }
     };
 
-    // 🔹 OUVE QUANDO TÉCNICO ASSUME O TICKET
     const handleTicketAssumed = (payload: { ticketId: string; technicianName: string }) => {
+      console.log("👨‍💻 Técnico assumiu o ticket:", payload);
       if (payload.ticketId === ticketId) {
         setCurrentTicketStatus('in_progress');
         
-        // Adiciona mensagem informando que técnico assumiu
         const systemMsg = {
-          id: crypto.randomUUID(),
+          id: crypto.randomUUID(), // 🔹 GARANTE ID ÚNICO
           ticket_id: ticketId,
-          sender_type: "ai" as const, // 🔹 CORRIGIDO: mudado de "system" para "ai"
+          sender_type: "ai" as const,
           sender_name: "Sistema",
           content: `✅ ${payload.technicianName} assumiu seu caso. Agora você está em contato direto com nosso técnico!`,
           created_at: new Date().toISOString(),
@@ -104,8 +127,12 @@ export const ClientPage: React.FC = () => {
     onNewMessage(handleNewMessage);
     onTicketAssumed(handleTicketAssumed);
 
-    return () => disconnectSocket();
-  }, [ticketId, messages]);
+    return () => {
+      console.log("🔌 Desconectando socket");
+      disconnectSocket();
+      socketConnectedRef.current = false; // 🔹 RESETA flag
+    };
+  }, [ticketId]); // 🔹 REMOVIDO messages das dependências
 
   useEffect(scrollToBottom, [messages]);
 
@@ -117,6 +144,8 @@ export const ClientPage: React.FC = () => {
   ) => {
     if (!ticketId) return null;
 
+    console.log("💾 Salvando mensagem no banco:", { content, senderType, senderName });
+    
     const { data, error } = await supabase
       .from("messages")
       .insert({
@@ -129,16 +158,27 @@ export const ClientPage: React.FC = () => {
       .single();
 
     if (error) {
-      console.error("Erro ao inserir mensagem:", error);
+      console.error("❌ Erro ao inserir mensagem:", error);
       return null;
     }
 
     if (data) {
-      setMessages((prev) => [...prev, data]);
+      console.log("✅ Mensagem salva no banco:", data);
+      
+      // 🔹 ATUALIZA O ESTADO APENAS UMA VEZ
+      setMessages((prev) => {
+        if (prev.some(m => m.id === data.id)) {
+          console.log("⚠️ Mensagem já existe no estado, evitando duplicata");
+          return prev;
+        }
+        return [...prev, data];
+      });
+      
       try {
+        console.log("📤 Enviando mensagem via socket");
         sendSocketMessage(ticketId, data);
       } catch (err) {
-        console.warn("socket emit failed:", err);
+        console.warn("⚠️ socket emit failed:", err);
       }
       return data;
     }
@@ -177,17 +217,18 @@ export const ClientPage: React.FC = () => {
     if (ticket) {
       setTicketId(ticket.id);
       setCurrentTicketStatus('open');
+      setMessages([]); // 🔹 LIMPA mensagens anteriores
 
       // Envia para o socket (avisar técnicos)
       sendSocketMessage(ticket.id, {
         ticket_id: ticket.id,
-        sender_type: "ai" as const, // 🔹 CORRIGIDO: mudado de "system" para "ai"
+        sender_type: "ai" as const,
         sender_name: "Sistema",
         content: "Novo ticket criado pelo cliente.",
       });
 
       const welcomeMsg: Message = {
-        id: crypto.randomUUID(),
+        id: crypto.randomUUID(), // 🔹 GARANTE ID ÚNICO
         ticket_id: ticket.id,
         sender_type: "ai",
         sender_name: "A.I Assistant",
@@ -212,18 +253,17 @@ export const ClientPage: React.FC = () => {
     setInputMessage("");
     setIsLoading(true);
 
-    // Se o ticket ainda está com a IA
+    console.log("📤 Cliente enviando mensagem:", userMessage);
+
     if (currentTicketStatus === 'open') {
       await addMessage(userMessage, "client", clientName);
 
       const aiResponse = await getAIResponse(ticketId, userMessage);
 
-      // 🔹 SE A IA RESOLVEU AUTOMATICAMENTE → MOSTRA FEEDBACK
       if (aiResponse.autoResolved) {
         setTimeout(async () => {
           await addMessage(aiResponse.text!, "ai", "A.I Assistant");
           
-          // Atualiza ticket para resolvido
           await supabase
             .from("tickets")
             .update({ 
@@ -234,24 +274,20 @@ export const ClientPage: React.FC = () => {
 
           setCurrentTicketStatus('closed');
           
-          // Mostra feedback imediatamente
           setTimeout(() => setShowFeedback(true), 1500);
           setIsLoading(false);
         }, 1200);
       }
-      // Se a IA ainda puder responder normalmente
       else if (aiResponse && aiResponse.text && !aiResponse.requiresHuman) {
         setTimeout(async () => {
           await addMessage(aiResponse.text!, "ai", "A.I Assistant");
           setIsLoading(false);
         }, 1200);
       }
-      // 🔹 CASO A IA DECIDA ENCAMINHAR AO TÉCNICO
       else if (aiResponse && aiResponse.requiresHuman) {
         const finalMsg = aiResponse.text!;
         await addMessage(finalMsg, "ai", "A.I Assistant");
 
-        // Atualiza ticket no banco para in_progress
         await supabase
           .from("tickets")
           .update({ status: "in_progress" })
@@ -263,9 +299,7 @@ export const ClientPage: React.FC = () => {
         setIsLoading(false);
       }
     } 
-    // Se o ticket já está com o técnico
     else if (currentTicketStatus === 'in_progress') {
-      // Cliente envia mensagem diretamente para o técnico
       await addMessage(userMessage, "client", clientName);
       setIsLoading(false);
     }
