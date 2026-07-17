@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { Send, MessageSquare, Star } from "lucide-react";
 import { LGPDModal } from "../components/LGPDModal";
 import { ChatMessage } from "../components/ChatMessage";
-import { supabase, Message } from "../lib/supabase";
+import { api, Message } from "../lib/api";
 import { getAIResponse } from "../lib/aiResponses";
 import {
   initSocket,
@@ -33,25 +33,22 @@ export const ClientPage: React.FC = () => {
   const socketConnectedRef = useRef(false);
 
   const scrollToBottom = () =>
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 
   // === Monitora status do ticket ===
   useEffect(() => {
     if (!ticketId) return;
 
     const checkTicketStatus = async () => {
-      const { data } = await supabase
-        .from('tickets')
-        .select('status')
-        .eq('id', ticketId)
-        .single();
-      
-      if (data) {
-        setCurrentTicketStatus(data.status);
-        
-        if (data.status === 'closed' && !showFeedback && !feedbackSent) {
+      try {
+        const ticket = await api.getTicket(ticketId);
+        setCurrentTicketStatus(ticket.status as 'open' | 'in_progress' | 'closed');
+
+        if (ticket.status === 'closed' && !showFeedback && !feedbackSent) {
           setTimeout(() => setShowFeedback(true), 1000);
         }
+      } catch (err) {
+        console.error("Erro ao verificar status do ticket:", err);
       }
     };
 
@@ -77,12 +74,17 @@ export const ClientPage: React.FC = () => {
 
     const handleNewMessage = (msg: any) => {
       console.log("📨 Nova mensagem recebida no cliente:", msg);
-      
+
       if (!msg?.ticket_id || msg.ticket_id !== ticketId) {
         console.log("❌ Mensagem ignorada - ticket não corresponde");
         return;
       }
-      
+
+      if (msg.is_internal) {
+        console.log("❌ Mensagem ignorada - nota interna");
+        return;
+      }
+
       // 🔹 VERIFICAÇÃO MAIS ROBUSTA para evitar duplicatas
       if (messages.some(m => m.id === msg.id)) {
         console.log("❌ Mensagem ignorada - já existe no estado");
@@ -134,7 +136,9 @@ export const ClientPage: React.FC = () => {
     };
   }, [ticketId]); // 🔹 REMOVIDO messages das dependências
 
-  useEffect(scrollToBottom, [messages]);
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
 
   // === Inserir mensagem no banco e emitir pelo socket ===
   const addMessage = async (
@@ -145,27 +149,17 @@ export const ClientPage: React.FC = () => {
     if (!ticketId) return null;
 
     console.log("💾 Salvando mensagem no banco:", { content, senderType, senderName });
-    
-    const { data, error } = await supabase
-      .from("messages")
-      .insert({
-        ticket_id: ticketId,
+
+    try {
+      const data = await api.sendMessage(ticketId, {
         sender_type: senderType,
         sender_name: senderName,
         content,
-      })
-      .select()
-      .single();
+      });
 
-    if (error) {
-      console.error("❌ Erro ao inserir mensagem:", error);
-      return null;
-    }
-
-    if (data) {
       console.log("✅ Mensagem salva no banco:", data);
-      
-      // 🔹 ATUALIZA O ESTADO APENAS UMA VEZ
+
+      // 🔹 ATUALIZA O ESTADO APENAS UMA VEZ (o servidor já retransmite via socket)
       setMessages((prev) => {
         if (prev.some(m => m.id === data.id)) {
           console.log("⚠️ Mensagem já existe no estado, evitando duplicata");
@@ -173,16 +167,12 @@ export const ClientPage: React.FC = () => {
         }
         return [...prev, data];
       });
-      
-      try {
-        console.log("📤 Enviando mensagem via socket");
-        sendSocketMessage(ticketId, data);
-      } catch (err) {
-        console.warn("⚠️ socket emit failed:", err);
-      }
+
       return data;
+    } catch (error) {
+      console.error("❌ Erro ao inserir mensagem:", error);
+      return null;
     }
-    return null;
   };
 
   const handleLGPDAccept = () => setLgpdAccepted(true);
@@ -195,19 +185,16 @@ export const ClientPage: React.FC = () => {
     setShowNameForm(false);
     setIsLoading(true);
 
-    const { data: ticket, error } = await supabase
-      .from("tickets")
-      .insert({
+    let ticket;
+    try {
+      ticket = await api.createTicket({
         client_name: clientName,
         client_email: clientEmail,
         problem_description: "Em andamento",
         status: "open",
         lgpd_accepted: true,
-      })
-      .select()
-      .single();
-
-    if (error) {
+      });
+    } catch (error) {
       console.error("Erro ao criar ticket:", error);
       alert("Erro ao iniciar atendimento. Tente novamente.");
       setIsLoading(false);
@@ -263,14 +250,11 @@ export const ClientPage: React.FC = () => {
       if (aiResponse.autoResolved) {
         setTimeout(async () => {
           await addMessage(aiResponse.text!, "ai", "A.I Assistant");
-          
-          await supabase
-            .from("tickets")
-            .update({ 
-              status: "closed",
-              resolved_at: new Date().toISOString()
-            })
-            .eq("id", ticketId);
+
+          await api.updateTicket(ticketId, {
+            status: "closed",
+            resolved_at: new Date().toISOString(),
+          });
 
           setCurrentTicketStatus('closed');
           
@@ -288,10 +272,7 @@ export const ClientPage: React.FC = () => {
         const finalMsg = aiResponse.text!;
         await addMessage(finalMsg, "ai", "A.I Assistant");
 
-        await supabase
-          .from("tickets")
-          .update({ status: "in_progress" })
-          .eq("id", ticketId);
+        await api.updateTicket(ticketId, { status: "in_progress" });
 
         setCurrentTicketStatus('in_progress');
         setIsLoading(false);
@@ -309,11 +290,7 @@ export const ClientPage: React.FC = () => {
   const handleSendFeedback = async () => {
     if (!rating || !ticketId) return;
 
-    await supabase.from("feedbacks").insert({
-      ticket_id: ticketId,
-      rating,
-      comment,
-    });
+    await api.sendFeedback(ticketId, rating, comment);
 
     setFeedbackSent(true);
 
@@ -379,36 +356,32 @@ export const ClientPage: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
-      <div className="max-w-4xl mx-auto p-4">
-        <div
-          className="bg-white rounded-2xl shadow-2xl overflow-hidden"
-          style={{ height: "calc(100vh - 2rem)" }}
-        >
-          <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-6">
-            <h1 className="text-2xl font-bold">A.I Desk - Suporte</h1>
-            <p className="text-sm opacity-90">Atendimento: {clientName}</p>
-            {ticketId && (
-              <p className="text-xs opacity-75 mt-1">
-                Chamado: #{ticketId.slice(0, 8)}
-                <span className={`ml-2 px-2 py-1 rounded-full text-xs font-semibold ${
-                  currentTicketStatus === 'open' 
-                    ? 'bg-yellow-100 text-yellow-800' 
-                    : currentTicketStatus === 'in_progress'
-                    ? 'bg-blue-100 text-blue-800'
-                    : 'bg-green-100 text-green-800'
-                }`}>
-                  {currentTicketStatus === 'open' 
-                    ? 'EM ATENDIMENTO IA' 
-                    : currentTicketStatus === 'in_progress'
-                    ? 'COM TÉCNICO'
-                    : 'FINALIZADO'}
-                </span>
-              </p>
-            )}
-          </div>
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 flex items-center justify-center p-4">
+      <div className="w-full max-w-4xl h-[calc(100vh-2rem)] bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+        <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-6 flex-shrink-0">
+          <h1 className="text-2xl font-bold">A.I Desk - Suporte</h1>
+          <p className="text-sm opacity-90">Atendimento: {clientName}</p>
+          {ticketId && (
+            <p className="text-xs opacity-75 mt-1">
+              Chamado: #{ticketId.slice(0, 8)}
+              <span className={`ml-2 px-2 py-1 rounded-full text-xs font-semibold ${
+                currentTicketStatus === 'open'
+                  ? 'bg-yellow-100 text-yellow-800'
+                  : currentTicketStatus === 'in_progress'
+                  ? 'bg-blue-100 text-blue-800'
+                  : 'bg-green-100 text-green-800'
+              }`}>
+                {currentTicketStatus === 'open'
+                  ? 'EM ATENDIMENTO IA'
+                  : currentTicketStatus === 'in_progress'
+                  ? 'COM TÉCNICO'
+                  : 'FINALIZADO'}
+              </span>
+            </p>
+          )}
+        </div>
 
-          <div className="h-[calc(100%-180px)] overflow-y-auto p-6 bg-gray-50">
+        <div className="flex-1 min-h-0 overflow-y-auto p-6 bg-gray-50">
             {messages.map((msg) => (
               <ChatMessage key={msg.id} message={msg} />
             ))}
@@ -481,9 +454,9 @@ export const ClientPage: React.FC = () => {
             <div ref={messagesEndRef} />
           </div>
 
-          {!showFeedback && currentTicketStatus !== 'closed' && (
-            <div className="p-4 bg-white border-t">
-              <form onSubmit={handleSendMessage} className="flex gap-2">
+        {!showFeedback && currentTicketStatus !== 'closed' && (
+          <div className="p-4 bg-white border-t flex-shrink-0">
+            <form onSubmit={handleSendMessage} className="flex gap-2">
                 <input
                   type="text"
                   value={inputMessage}
@@ -513,14 +486,13 @@ export const ClientPage: React.FC = () => {
             </div>
           )}
 
-          {currentTicketStatus === 'closed' && !showFeedback && !feedbackSent && (
-            <div className="p-4 bg-gray-100 border-t text-center">
-              <p className="text-gray-600">
-                Este chamado foi encerrado. Obrigado por entrar em contato!
-              </p>
-            </div>
-          )}
-        </div>
+        {currentTicketStatus === 'closed' && !showFeedback && !feedbackSent && (
+          <div className="p-4 bg-gray-100 border-t text-center flex-shrink-0">
+            <p className="text-gray-600">
+              Este chamado foi encerrado. Obrigado por entrar em contato!
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

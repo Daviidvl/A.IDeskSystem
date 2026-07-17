@@ -1,10 +1,10 @@
 import React, { useState } from "react";
 import { LogIn, MessageSquare, Eye, EyeOff } from "lucide-react";
-import { supabase } from "../lib/supabase";
+import { api } from "../lib/api";
 import { useNavigate } from "react-router-dom";
 
 export const LoginPage: React.FC = () => {
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
@@ -17,22 +17,12 @@ export const LoginPage: React.FC = () => {
     setError("");
 
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password: password,
-      });
-
-      if (error) {
-        setError("Credenciais inválidas. Verifique seu e-mail e senha.");
-        return;
-      }
-
-      if (data.user) {
-        // Login bem-sucedido - redireciona para o painel do técnico
-        navigate("/tecnico");
-      }
+      const { token } = await api.login(username.trim(), password);
+      api.saveToken(token);
+      // Login bem-sucedido - redireciona para o painel do técnico
+      navigate("/tecnico");
     } catch (err) {
-      setError("Erro ao fazer login. Tente novamente.");
+      setError("Credenciais inválidas. Verifique seu usuário e senha.");
     } finally {
       setIsLoading(false);
     }
@@ -62,14 +52,14 @@ export const LoginPage: React.FC = () => {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              E-mail
+              Usuário
             </label>
             <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
-              placeholder="tecnico@empresa.com"
+              placeholder="admin"
               required
               disabled={isLoading}
             />

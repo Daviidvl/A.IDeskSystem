@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from "react";
-import { Send, CheckCircle, MessageSquare, XCircle, User, Clock, LogOut, BarChart3 } from "lucide-react";
-import { supabase, Message } from "../lib/supabase";
+import { Send, CheckCircle, MessageSquare, XCircle, User, Clock, LogOut, BarChart3, Zap, Lock, Plus, Trash2 } from "lucide-react";
+import { api, Message, Macro } from "../lib/api";
+import { auth } from "../lib/auth";
 import { ChatMessage } from "../components/ChatMessage";
 import {
   initSocket,
@@ -35,76 +36,103 @@ export const TechnicianPage: React.FC = () => {
   const [inputMessage, setInputMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
+  const [macros, setMacros] = useState<Macro[]>([]);
+  const [showMacros, setShowMacros] = useState(false);
+  const [showNewMacroForm, setShowNewMacroForm] = useState(false);
+  const [newMacroTitle, setNewMacroTitle] = useState("");
+  const [newMacroContent, setNewMacroContent] = useState("");
+  const [isInternalNote, setIsInternalNote] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
   // === Carregar usuário atual ===
   useEffect(() => {
     const getUser = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await auth.getCurrentUser();
       setCurrentUser(user);
     };
     getUser();
   }, []);
 
+  // === Carregar respostas rápidas (macros) ===
+  useEffect(() => {
+    api.listMacros().then(setMacros).catch((error) => {
+      console.error("Erro ao carregar respostas rápidas:", error);
+    });
+  }, []);
+
+  // === Aplicar macro no campo de mensagem ===
+  const applyMacro = (macro: Macro) => {
+    setInputMessage(macro.content);
+    setShowMacros(false);
+  };
+
+  // === Criar nova resposta rápida ===
+  const handleCreateMacro = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newMacroTitle.trim() || !newMacroContent.trim()) return;
+
+    try {
+      const macro = await api.createMacro(newMacroTitle.trim(), newMacroContent.trim());
+      setMacros((prev) => [...prev, macro]);
+      setNewMacroTitle("");
+      setNewMacroContent("");
+      setShowNewMacroForm(false);
+    } catch (error) {
+      console.error("Erro ao criar resposta rápida:", error);
+    }
+  };
+
+  // === Excluir resposta rápida ===
+  const handleDeleteMacro = async (id: string) => {
+    try {
+      await api.deleteMacro(id);
+      setMacros((prev) => prev.filter((m) => m.id !== id));
+    } catch (error) {
+      console.error("Erro ao excluir resposta rápida:", error);
+    }
+  };
+
   // === Carrega todos os tickets abertos ou em andamento ===
   const loadTickets = async () => {
-    const { data, error } = await supabase
-      .from("tickets")
-      .select("*")
-      .in("status", ["open", "in_progress"])
-      .order("created_at", { ascending: false });
+    try {
+      const data = await api.listTickets(["open", "in_progress"]);
+      setTickets(data);
 
-    if (error) console.error("Erro ao carregar tickets:", error);
-    if (data) setTickets(data);
+      setSelectedTicket((current: any) => {
+        if (current && !data.some((t) => t.id === current.id)) {
+          setMessages([]);
+          return null;
+        }
+        return current;
+      });
+    } catch (error) {
+      console.error("Erro ao carregar tickets:", error);
+    }
   };
 
   // === Carrega as mensagens do ticket selecionado ===
   const loadMessages = async (ticketId: string) => {
-    const { data } = await supabase
-      .from("messages")
-      .select("*")
-      .eq("ticket_id", ticketId)
-      .order("created_at", { ascending: true });
-
-    if (data) setMessages(data);
+    try {
+      const data = await api.listMessages(ticketId);
+      setMessages(data);
+    } catch (error) {
+      console.error("Erro ao carregar mensagens:", error);
+    }
   };
 
-  // === Escuta atualizações em tempo real do Supabase ===
+  // === Atualiza a lista de tickets periodicamente (substitui o realtime do Supabase) ===
   useEffect(() => {
     loadTickets();
+    const interval = setInterval(loadTickets, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
-    const channel = supabase
-      .channel("tickets_realtime")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "tickets" },
-        async (payload: any) => {
-          if (payload.eventType === 'UPDATE' && payload.new.status === 'closed') {
-            setTickets(prev => prev.filter(t => t.id !== payload.new.id));
-            if (selectedTicket?.id === payload.new.id) {
-              setSelectedTicket(null);
-              setMessages([]);
-            }
-          } else {
-            await loadTickets();
-          }
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "messages" },
-        (payload: any) => {
-          if (selectedTicket && payload.new.ticket_id === selectedTicket.id) {
-            loadMessages(selectedTicket.id);
-          }
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+  // === Recarrega mensagens do ticket selecionado periodicamente ===
+  useEffect(() => {
+    if (!selectedTicket) return;
+    const interval = setInterval(() => loadMessages(selectedTicket.id), 5000);
+    return () => clearInterval(interval);
   }, [selectedTicket]);
 
   // === SOCKET.IO realtime ===
@@ -153,36 +181,21 @@ export const TechnicianPage: React.FC = () => {
     joinTicket(ticket.id);
 
     if (ticket.status === "open") {
-      const { data, error } = await supabase
-        .from("tickets")
-        .update({ status: "in_progress" })
-        .eq("id", ticket.id)
-        .select()
-        .single();
-
-      if (!error && data) {
-        setSelectedTicket(data);
+      try {
+        const updated = await api.updateTicket(ticket.id, { status: "in_progress" });
+        setSelectedTicket(updated);
         loadTickets();
-        
-        const welcomeMsg = {
-          ticket_id: ticket.id,
-          sender_type: "technician" as const,
+
+        const msgData = await api.sendMessage(ticket.id, {
+          sender_type: "technician",
           sender_name: "Técnico",
           content: `Olá! Sou o técnico responsável pelo seu caso. Em que posso ajudá-lo? 👨‍💻`,
-        };
+        });
 
-        const { data: msgData } = await supabase
-          .from("messages")
-          .insert(welcomeMsg)
-          .select()
-          .single();
-
-        if (msgData) {
-          setMessages((prev) => [...prev, msgData]);
-          sendSocketMessage(ticket.id, msgData);
-        }
-
+        setMessages((prev) => [...prev, msgData]);
         sendTicketAssumed(ticket.id, "Técnico");
+      } catch (error) {
+        console.error("Erro ao assumir ticket:", error);
       }
     }
   };
@@ -193,40 +206,23 @@ export const TechnicianPage: React.FC = () => {
     if (!selectedTicket || !inputMessage.trim()) return;
     setIsLoading(true);
 
-    const newMessage = {
-      ticket_id: selectedTicket.id,
-      sender_type: "technician" as const,
-      sender_name: "Técnico",
-      content: inputMessage.trim(),
-    };
+    try {
+      const data = await api.sendMessage(selectedTicket.id, {
+        sender_type: "technician",
+        sender_name: "Técnico",
+        content: inputMessage.trim(),
+        is_internal: isInternalNote,
+      });
 
-    const { data, error } = await supabase
-      .from("messages")
-      .insert(newMessage)
-      .select()
-      .single();
-
-    if (!error && data) {
       setMessages((prev) => [...prev, data]);
-      sendSocketMessage(selectedTicket.id, data);
-      
-      if (selectedTicket.status === 'open') {
-        await supabase
-          .from("tickets")
-          .update({ status: "in_progress" })
-          .eq("id", selectedTicket.id);
-        
-        const { data: updatedTicket } = await supabase
-          .from("tickets")
-          .select("*")
-          .eq("id", selectedTicket.id)
-          .single();
-        
-        if (updatedTicket) {
-          setSelectedTicket(updatedTicket);
-          loadTickets();
-        }
+
+      if (!isInternalNote && selectedTicket.status === 'open') {
+        const updatedTicket = await api.updateTicket(selectedTicket.id, { status: "in_progress" });
+        setSelectedTicket(updatedTicket);
+        loadTickets();
       }
+    } catch (error) {
+      console.error("Erro ao enviar mensagem:", error);
     }
 
     setInputMessage("");
@@ -241,35 +237,25 @@ export const TechnicianPage: React.FC = () => {
       return;
     }
 
-    const { error: updateError } = await supabase
-      .from("tickets")
-      .update({
+    try {
+      await api.updateTicket(selectedTicket.id, {
         status: "closed",
         resolved_at: new Date().toISOString(),
-      })
-      .eq("id", selectedTicket.id);
-
-    if (updateError) {
+      });
+    } catch {
       alert("Erro ao encerrar o chamado.");
       return;
     }
 
-    const feedbackMsg = {
-      ticket_id: selectedTicket.id,
-      sender_type: "ai" as const,
-      sender_name: "A.I Assistant",
-      content: "✅ Seu chamado foi encerrado com sucesso! Por favor, avalie o atendimento atribuindo uma nota de 1 a 5 ⭐ e, se desejar, deixe um comentário. 💬",
-    };
-
-    const { data: msgData, error: msgError } = await supabase
-      .from("messages")
-      .insert(feedbackMsg)
-      .select()
-      .single();
-
-    if (!msgError && msgData) {
+    try {
+      const msgData = await api.sendMessage(selectedTicket.id, {
+        sender_type: "ai",
+        sender_name: "A.I Assistant",
+        content: "✅ Seu chamado foi encerrado com sucesso! Por favor, avalie o atendimento atribuindo uma nota de 1 a 5 ⭐ e, se desejar, deixe um comentário. 💬",
+      });
       setMessages((prev) => [...prev, msgData]);
-      sendSocketMessage(selectedTicket.id, msgData);
+    } catch (error) {
+      console.error("Erro ao enviar mensagem de encerramento:", error);
     }
 
     sendSocketMessage(selectedTicket.id, {
@@ -293,7 +279,7 @@ export const TechnicianPage: React.FC = () => {
 
   // === Logout ===
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    await auth.signOut();
     navigate('/login');
   };
 
@@ -304,7 +290,7 @@ export const TechnicianPage: React.FC = () => {
 
   // === Scroll automático ===
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [messages]);
 
   const isTicketClosed = selectedTicket?.status === "closed";
@@ -500,7 +486,106 @@ export const TechnicianPage: React.FC = () => {
             </div>
 
             {/* Input */}
-            <div className="bg-white border-t p-4">
+            <div className="bg-white border-t p-4 relative">
+              {/* Painel de respostas rápidas */}
+              {showMacros && (
+                <div className="absolute bottom-full left-4 mb-2 w-96 max-h-80 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-xl z-10">
+                  <div className="p-2 border-b flex justify-between items-center bg-gray-50">
+                    <span className="text-xs font-semibold text-gray-600 uppercase">Respostas rápidas</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowNewMacroForm((v) => !v)}
+                      className="text-blue-600 hover:text-blue-800 flex items-center gap-1 text-xs font-medium"
+                    >
+                      <Plus className="w-3 h-3" /> Nova
+                    </button>
+                  </div>
+
+                  {showNewMacroForm && (
+                    <form onSubmit={handleCreateMacro} className="p-3 border-b bg-blue-50 space-y-2">
+                      <input
+                        type="text"
+                        placeholder="Título"
+                        value={newMacroTitle}
+                        onChange={(e) => setNewMacroTitle(e.target.value)}
+                        className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
+                      />
+                      <textarea
+                        placeholder="Texto da resposta"
+                        value={newMacroContent}
+                        onChange={(e) => setNewMacroContent(e.target.value)}
+                        className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
+                        rows={2}
+                      />
+                      <button
+                        type="submit"
+                        disabled={!newMacroTitle.trim() || !newMacroContent.trim()}
+                        className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm py-1.5 rounded disabled:opacity-50"
+                      >
+                        Salvar
+                      </button>
+                    </form>
+                  )}
+
+                  {macros.length === 0 ? (
+                    <p className="p-4 text-sm text-gray-400 text-center">Nenhuma resposta rápida cadastrada</p>
+                  ) : (
+                    macros.map((macro) => (
+                      <div
+                        key={macro.id}
+                        className="flex items-start justify-between gap-2 px-3 py-2 hover:bg-gray-50 border-b last:border-b-0 group"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => applyMacro(macro)}
+                          className="flex-1 text-left"
+                        >
+                          <p className="text-sm font-medium text-gray-800">{macro.title}</p>
+                          <p className="text-xs text-gray-500 truncate">{macro.content}</p>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteMacro(macro.id)}
+                          className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600 transition-opacity"
+                          title="Excluir"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
+              <div className="flex gap-2 mb-2">
+                <button
+                  type="button"
+                  onClick={() => setShowMacros((v) => !v)}
+                  disabled={isTicketClosed}
+                  className={`flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-full border transition-colors disabled:opacity-50 ${
+                    showMacros
+                      ? "bg-blue-600 text-white border-blue-600"
+                      : "bg-white text-gray-600 border-gray-300 hover:bg-gray-50"
+                  }`}
+                >
+                  <Zap className="w-3.5 h-3.5" />
+                  Respostas rápidas
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsInternalNote((v) => !v)}
+                  disabled={isTicketClosed}
+                  className={`flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-full border transition-colors disabled:opacity-50 ${
+                    isInternalNote
+                      ? "bg-amber-500 text-white border-amber-500"
+                      : "bg-white text-gray-600 border-gray-300 hover:bg-gray-50"
+                  }`}
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  Nota interna
+                </button>
+              </div>
+
               <form onSubmit={handleSendMessage} className="flex gap-2">
                 <input
                   type="text"
@@ -509,24 +594,36 @@ export const TechnicianPage: React.FC = () => {
                   placeholder={
                     isTicketClosed
                       ? "Chamado encerrado. Não é possível enviar mensagens."
+                      : isInternalNote
+                      ? "Escreva uma nota interna (não visível ao cliente)..."
                       : `Digite sua resposta para ${selectedTicket.client_name}...`
                   }
-                  className="flex-1 border border-gray-300 rounded-lg px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className={`flex-1 border rounded-lg px-4 py-3 focus:ring-2 focus:border-transparent ${
+                    isInternalNote
+                      ? "border-amber-300 bg-amber-50 focus:ring-amber-400"
+                      : "border-gray-300 focus:ring-blue-500"
+                  }`}
                   disabled={isLoading || isTicketClosed}
                 />
                 <button
                   type="submit"
                   disabled={!inputMessage.trim() || isLoading || isTicketClosed}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg shadow disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+                  className={`text-white px-6 py-3 rounded-lg shadow disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2 ${
+                    isInternalNote ? "bg-amber-500 hover:bg-amber-600" : "bg-blue-600 hover:bg-blue-700"
+                  }`}
                 >
-                  <Send className="w-5 h-5" />
-                  Enviar
+                  {isInternalNote ? <Lock className="w-5 h-5" /> : <Send className="w-5 h-5" />}
+                  {isInternalNote ? "Salvar nota" : "Enviar"}
                 </button>
               </form>
-              
+
               {!isTicketClosed && (
                 <p className="text-xs text-gray-500 mt-2 text-center">
-                  💬 Atendendo <span className="font-semibold">{selectedTicket.client_name}</span>
+                  {isInternalNote
+                    ? "🔒 Esta nota será visível apenas para técnicos"
+                    : (
+                      <>💬 Atendendo <span className="font-semibold">{selectedTicket.client_name}</span></>
+                    )}
                 </p>
               )}
             </div>

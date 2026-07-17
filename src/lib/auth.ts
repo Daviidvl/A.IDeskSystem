@@ -1,21 +1,26 @@
-import { supabase } from './supabase';
+import { api, Technician } from "./api";
 
 export const auth = {
   // Verificar se usuário está autenticado
-  async getCurrentUser() {
-    const { data: { user } } = await supabase.auth.getUser();
-    return user;
+  async getCurrentUser(): Promise<Technician | null> {
+    if (!api.getToken()) return null;
+    try {
+      const { user } = await api.me();
+      return user;
+    } catch {
+      api.logout();
+      return null;
+    }
   },
 
   // Fazer logout
   async signOut() {
-    const { error } = await supabase.auth.signOut();
-    if (error) throw error;
+    api.logout();
   },
 
   // Verificar sessão ativa
   async getSession() {
-    const { data: { session } } = await supabase.auth.getSession();
-    return session;
-  }
+    const token = api.getToken();
+    return token ? { token } : null;
+  },
 };

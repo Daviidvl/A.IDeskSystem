@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { Activity, CheckCircle, Clock, AlertCircle, MessageSquare, ArrowLeft } from 'lucide-react';
-import { supabase, Ticket } from '../lib/supabase';
+import { api } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 
 interface Stats {
@@ -31,10 +31,13 @@ export const DashboardPage: React.FC = () => {
   }, []);
 
   const loadStats = async () => {
-    const { data: tickets } = await supabase
-      .from('tickets')
-      .select('*')
-      .order('created_at', { ascending: false });
+    let tickets;
+    try {
+      tickets = await api.listTickets();
+    } catch (err) {
+      console.error("Erro ao carregar estatísticas do dashboard:", err);
+      return;
+    }
 
     if (tickets) {
       const open = tickets.filter(t => t.status === 'open').length;
@@ -44,7 +47,7 @@ export const DashboardPage: React.FC = () => {
       const resolvedWithTime = tickets.filter(t => t.resolved_at && t.created_at);
       const avgTime = resolvedWithTime.length > 0
         ? resolvedWithTime.reduce((sum, t) => {
-            const diff = new Date(t.resolved_at).getTime() - new Date(t.created_at).getTime();
+            const diff = new Date(t.resolved_at!).getTime() - new Date(t.created_at).getTime();
             return sum + diff;
           }, 0) / resolvedWithTime.length
         : 0;
@@ -190,7 +193,7 @@ export const DashboardPage: React.FC = () => {
                   cx="50%"
                   cy="50%"
                   labelLine={false}
-                  label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                  label={({ name, percent }: { name?: string; percent?: number }) => `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`}
                   outerRadius={100}
                   fill="#8884d8"
                   dataKey="value"

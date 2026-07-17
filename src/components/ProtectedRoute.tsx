@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
-import { supabase } from '../lib/supabase';
+import { auth } from '../lib/auth';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -12,7 +12,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const { data: { user } } = await supabase.auth.getUser();
+        const user = await auth.getCurrentUser();
         setIsAuthenticated(!!user);
       } catch (error) {
         console.error('Erro ao verificar autenticação:', error);
@@ -21,15 +21,6 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
     };
 
     checkAuth();
-
-    // Escutar mudanças de autenticação
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        setIsAuthenticated(!!session);
-      }
-    );
-
-    return () => subscription.unsubscribe();
   }, []);
 
   if (isAuthenticated === null) {

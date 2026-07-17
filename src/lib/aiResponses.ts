@@ -1,9 +1,4 @@
-import OpenAI from "openai";
-
-const client = new OpenAI({
-  apiKey: import.meta.env.VITE_OPENAI_API_KEY,
-  dangerouslyAllowBrowser: true,
-});
+import { api } from "./api";
 
 // Mantém contador por ticket (persistente)
 const attemptCount: Record<string, number> = JSON.parse(
@@ -119,43 +114,8 @@ export async function getAIResponse(ticketId: string, userMessage: string): Prom
 
     console.log(`🤖 Tentativa da IA (${ticketId}): ${attemptCount[ticketId]}`);
 
-    // Prompt mais inteligente para a IA
-    const systemPrompt = `Você é o assistente técnico virtual da plataforma A.I Desk. Siga estas regras:
-
-1. Tente resolver o problema do usuário de forma CLARA e OBJETIVA
-2. Se o usuário pedir explicitamente por humano/técnico, informe que irá encaminhar
-3. Se o usuário confirmar que problema foi resolvido, agradeça e encerre
-4. Você tem até 3 tentativas para resolver
-5. Após 3 tentativas sem sucesso, encaminhe para técnico humano
-6. Mantenha respostas curtas e diretas ao ponto
-7. Foque em soluções práticas e passo a passo
-
-Formato de resposta:
-- Problema técnico: Ofereça solução passo a passo
-- Pedido por humano: Encaminhe imediatamente  
-- Problema resolvido: Agradeça e encerre
-- Limite atingido: Encaminhe para técnico`;
-
-    // Gera resposta da IA
-    const completion = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content: systemPrompt,
-        },
-        {
-          role: "user",
-          content: userMessage,
-        },
-      ],
-      max_tokens: 300,
-      temperature: 0.7,
-    });
-
-    const aiText =
-      completion.choices[0]?.message?.content?.trim() ||
-      "Desculpe, não consegui gerar uma resposta agora.";
+    // Gera resposta da IA (backend chama a API da Anthropic)
+    const { text: aiText } = await api.getAIResponse(userMessage);
 
     // Verifica se atingiu o limite após a resposta
     const requiresHuman = attemptCount[ticketId] >= 3;
